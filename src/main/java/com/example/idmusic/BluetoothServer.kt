@@ -22,7 +22,7 @@ class BluetoothServer(private val context: Context) : Thread() {
     }
 
     private val adapter = BluetoothAdapter.getDefaultAdapter()
-    private val uuid = UUID.fromString("12345678-1234-1234-1234-123456789abc")
+    private val uuid = UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315")
 
     private var lastState: String? = null
 

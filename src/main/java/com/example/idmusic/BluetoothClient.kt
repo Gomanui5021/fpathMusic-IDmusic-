@@ -38,7 +38,7 @@ class BluetoothClient(private val context: Context) {
         Thread {
             try {
                 socket = device.createRfcommSocketToServiceRecord(
-                    UUID.fromString("12345678-1234-1234-1234-123456789abc")
+                    UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315")
                 )
 
                 BluetoothAdapter.getDefaultAdapter()?.cancelDiscovery()
