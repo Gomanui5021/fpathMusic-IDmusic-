@@ -54,9 +54,20 @@ class MainActivity : ComponentActivity() {
             val launcher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { result ->
-                val audio = result[Manifest.permission.READ_MEDIA_AUDIO] == true
-                val bt = result[Manifest.permission.BLUETOOTH_CONNECT] == true
-                val scan = result[Manifest.permission.BLUETOOTH_SCAN] == true
+                val audio = if (Build.VERSION.SDK_INT >= 33) {
+                    result[Manifest.permission.READ_MEDIA_AUDIO] == true
+                } else {
+                    result[Manifest.permission.READ_EXTERNAL_STORAGE] == true
+                }
+
+                val bt = if (Build.VERSION.SDK_INT >= 31) {
+                    result[Manifest.permission.BLUETOOTH_CONNECT] == true
+                } else true
+
+                val scan = if (Build.VERSION.SDK_INT >= 31) {
+                    result[Manifest.permission.BLUETOOTH_SCAN] == true
+                } else true
+
                 isPermissionGranted = audio && bt && scan
             }
 
@@ -67,15 +78,28 @@ class MainActivity : ComponentActivity() {
                 Log.d("Permission", "通知権限: $granted")
             }
 
+
             LaunchedEffect(Unit) {
-                val neededPermissions = listOf(
-                    Manifest.permission.READ_MEDIA_AUDIO,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN
-                )
+
+                val neededPermissions = if (Build.VERSION.SDK_INT >= 33) {
+                    // Android13+
+                    listOf(
+                        Manifest.permission.READ_MEDIA_AUDIO,
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.BLUETOOTH_SCAN
+                    )
+                } else {
+                    // Android9〜12
+                    listOf(
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    )
+                }
 
                 val notGranted = neededPermissions.filter {
-                    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        it)!= PackageManager.PERMISSION_GRANTED
                 }
 
                 if (notGranted.isNotEmpty()) {
