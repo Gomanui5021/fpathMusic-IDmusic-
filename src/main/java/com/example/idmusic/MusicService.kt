@@ -72,8 +72,17 @@ class MusicService : Service() {
                     if (uriString != null) {
                         val uri = Uri.parse(uriString)
 
+                        val fd = contentResolver.openFileDescriptor(uri, "r")
+
+                        if (fd == null) {
+                            Log.e("MusicService", "FD取得失敗: $uri")
+                            return START_NOT_STICKY
+                        }
+
                         mediaPlayer = MediaPlayer().apply {
-                            setDataSource(this@MusicService, uri)
+                            setDataSource(fd.fileDescriptor)
+                            fd.close()
+
                             prepare()
                             start()
                         }

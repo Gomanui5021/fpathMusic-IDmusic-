@@ -99,7 +99,8 @@ class MainActivity : ComponentActivity() {
                 val notGranted = neededPermissions.filter {
                     ContextCompat.checkSelfPermission(
                         context,
-                        it)!= PackageManager.PERMISSION_GRANTED
+                        it
+                    ) != PackageManager.PERMISSION_GRANTED
                 }
 
                 if (notGranted.isNotEmpty()) {
@@ -129,10 +130,16 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center
         ) {
-            Button(onClick = { onSelect("CLIENT") }, modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Button(
+                onClick = { onSelect("CLIENT") },
+                modifier = Modifier.fillMaxWidth().padding(12.dp)
+            ) {
                 Text("送信側")
             }
-            Button(onClick = { onSelect("SERVER") }, modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Button(
+                onClick = { onSelect("SERVER") },
+                modifier = Modifier.fillMaxWidth().padding(12.dp)
+            ) {
                 Text("受信側")
             }
         }
@@ -140,7 +147,10 @@ class MainActivity : ComponentActivity() {
 
     // ---------------- Client ----------------
     @Composable
-    fun MusicScreen(notificationLauncher: androidx.activity.compose.ManagedActivityResultLauncher<String, Boolean>, onDisconnect: () -> Unit) {
+    fun MusicScreen(
+        notificationLauncher: androidx.activity.compose.ManagedActivityResultLauncher<String, Boolean>,
+        onDisconnect: () -> Unit
+    ) {
         val context = LocalContext.current
         val bluetoothClient = remember { BluetoothClient(context) }
         var connectedDeviceName by remember { mutableStateOf("未接続") }
@@ -645,24 +655,52 @@ class MainActivity : ComponentActivity() {
     }
 
 
-
     // ---------------- Music List ----------------
     fun getMusicList(context: Context): List<MusicItem> {
         val list = mutableListOf<MusicItem>()
-        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val cursor = context.contentResolver.query(collection, null, null, null, null)
-        cursor?.use {
-            val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-            val titleCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-            val folderCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.BUCKET_DISPLAY_NAME)
-            while (it.moveToNext()) {
-                val id = it.getLong(idCol)
-                val title = it.getString(titleCol)
-                val folder = it.getString(folderCol) ?: "Unknown"
-                val uri = Uri.withAppendedPath(collection, id.toString())
-                list.add(MusicItem(title, uri, folder))
+
+        val volumes = MediaStore.getExternalVolumeNames(context)
+
+        for (volume in volumes) {
+
+            val collection = MediaStore.Audio.Media.getContentUri(volume)
+
+            val projection = arrayOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.TITLE
+            )
+
+            val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+
+            val cursor = context.contentResolver.query(
+                collection,
+                projection,
+                selection,
+                null,
+                null
+            )
+
+            cursor?.use {
+                val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+
+                while (it.moveToNext()) {
+                    val id = it.getLong(idColumn)
+                    val title = it.getString(titleColumn)
+
+                    val contentUri = Uri.withAppendedPath(collection, id.toString())
+
+                    list.add(
+                        MusicItem(
+                            title = title,
+                            uri = contentUri,
+                            folder = if (volume == "external_primary") "Music" else "SDカード"
+                        )
+                    )
+                }
             }
         }
+
         return list
     }
-}
+    }
