@@ -6,5 +6,6 @@ import android.net.Uri
 data class MusicItem(
     val title: String,
     val uri: Uri,
-    val folder: String = "Unknown"
+    val folder: String = "Unknown",
+    val path: String
 )

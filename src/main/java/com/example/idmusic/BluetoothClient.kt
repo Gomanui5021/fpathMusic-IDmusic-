@@ -18,13 +18,13 @@ class BluetoothClient(private val context: Context) {
 
     var onConnected: (() -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
-    var onReceiveMusicList: ((List<Pair<String, String>>) -> Unit)? = null
+    var onReceiveMusicList: ((List<Triple<String, String, String>>) -> Unit)? = null
     var onReceiveMessage: ((String) -> Unit)? = null
     var onDeviceNameReceived: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onProgress: ((Int, Int) -> Unit)? = null
 
-    private val tempList = mutableListOf<Pair<String, String>>()
+    private val tempList = mutableListOf<Triple<String, String, String>>()
 
 
     companion object {
@@ -206,8 +206,16 @@ class BluetoothClient(private val context: Context) {
 
             line.startsWith("ITEM:") -> {
                 val parts = line.removePrefix("ITEM:").split("||")
-                if (parts.size == 3) {
-                    tempList.add("${parts[0]}/${parts[1]}" to parts[2])
+
+                if (parts.size >= 4) {
+                    val folder = parts[0]
+                    val title = parts[1]
+                    val uri = parts[2]
+                    val path = parts[3]
+
+                    tempList.add(
+                        Triple("$folder/$title", uri, path)
+                    )
                 }
             }
 

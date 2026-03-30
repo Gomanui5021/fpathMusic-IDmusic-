@@ -49,7 +49,7 @@ class BluetoothServer(private val context: Context) : Thread() {
         thread {
             try {
                 musicList.forEach {
-                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}\n"
+                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}\n"
                     outputStream?.write(msg.toByteArray())
                 }
                 outputStream?.write("END\n".toByteArray())

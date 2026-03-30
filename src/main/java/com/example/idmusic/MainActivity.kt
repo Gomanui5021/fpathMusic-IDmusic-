@@ -38,7 +38,12 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.rememberAsyncImagePainter
-import kotlin.text.Charsets
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+
 
 class MainActivity : ComponentActivity() {
 
@@ -167,6 +172,8 @@ class MainActivity : ComponentActivity() {
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
         var isMusicScreen by remember { mutableStateOf(false) }
+        var localMusicItems by remember { mutableStateOf(listOf<MusicItem>()) }
+        var btMusicItems by remember { mutableStateOf(listOf<MusicItem>()) }
 
         // 初期は空で、サーバーから受信して更新
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
@@ -179,6 +186,12 @@ class MainActivity : ComponentActivity() {
         }
 
         LaunchedEffect(Unit) {
+
+            localMusicItems= getMusicList(context)
+            Log.d("MUSIC_SIZE", musicItems.size.toString())
+            Log.d("FOLDER_CHECK", musicItems.map { it.folder }.toString())
+
+
             bluetoothClient.onConnected = {
                 isConnected = true
                 connectionState = "接続完了"
@@ -190,10 +203,14 @@ class MainActivity : ComponentActivity() {
             }
 
             bluetoothClient.onReceiveMusicList = { list ->
-                musicItems = list.map { (folderTitle, uriStr) ->
-                    val folder = folderTitle.substringBefore("/")
-                    val title = folderTitle.substringAfter("/")
-                    MusicItem(title, Uri.parse(uriStr), folder)
+                CoroutineScope(Dispatchers.Main).launch {
+                    musicItems = list.map { (folderTitle, uriStr, path) ->
+
+                        val folder = folderTitle.substringBefore("/")
+                        val title = folderTitle.substringAfter("/")
+
+                        MusicItem(title, Uri.parse(uriStr), folder, path)
+                    }
                 }
             }
 
@@ -306,7 +323,10 @@ class MainActivity : ComponentActivity() {
                             item {
                                 Text(
                                     text = if (isExpanded) "📂 $folder" else "📁 $folder",
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(width = 1.dp,Color.Black)
+                                        .height(56.dp)
                                         .clickable { expandedState[folder] = !isExpanded }
                                         .padding(8.dp)
                                 )
@@ -314,37 +334,55 @@ class MainActivity : ComponentActivity() {
                             if (isExpanded) {
                                 items(songs) { song ->
                                     val isCurrent = song.title == currentSongTitle
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().height(56.dp).clickable {
-                                            bluetoothClient.sendPlay(song.uri.toString())
-                                            currentSongTitle = song.title
-                                            isPlaying = true
 
-                                            // 通知権限チェック
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                                ContextCompat.checkSelfPermission(
-                                                    context,
-                                                    Manifest.permission.POST_NOTIFICATIONS
-                                                )
-                                                != PackageManager.PERMISSION_GRANTED
-                                            ) {
-                                                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                            }
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+                                            .clickable {
+                                                bluetoothClient.sendPlay(song.uri.toString())
+                                                currentSongTitle = song.title
+                                                isPlaying = true
 
-                                            val intent =
-                                                Intent(context, MusicService::class.java).apply {
+
+                                                // 通知権限チェック
+                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                                    ContextCompat.checkSelfPermission(
+                                                        context,
+                                                        Manifest.permission.POST_NOTIFICATIONS
+                                                    )
+                                                    != PackageManager.PERMISSION_GRANTED
+                                                ) {
+                                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                                }
+
+                                                val intent = Intent(context, MusicService::class.java).apply {
                                                     action = MusicService.ACTION_PLAY
                                                     putExtra("MUSIC_URI", song.uri.toString())
                                                     putExtra("TITLE", song.title)
                                                     putExtra("DEVICE", connectedDeviceName)
                                                 }
-                                            ContextCompat.startForegroundService(context, intent)
-                                        }.padding(horizontal = 16.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                                ContextCompat.startForegroundService(context, intent)
+                                            }
+                                            .padding(12.dp)
                                     ) {
+
+                                        // 🎵 タイトル
                                         Text(
                                             text = if (isCurrent) "▶ ${song.title}" else song.title,
-                                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                            color = if (isCurrent)
+                                                MaterialTheme.colorScheme.primary
+                                            else
+                                                MaterialTheme.colorScheme.onBackground
+                                        )
+
+                                        // 📁 パス（小さく）
+                                        Text(
+                                            text = song.path,
+                                            fontSize = 12.sp,
+                                            color = Color.Gray.copy(alpha = 0.7f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
@@ -663,14 +701,17 @@ class MainActivity : ComponentActivity() {
 
         for (volume in volumes) {
 
+            val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+
             val collection = MediaStore.Audio.Media.getContentUri(volume)
+
 
             val projection = arrayOf(
                 MediaStore.Audio.Media._ID,
-                MediaStore.Audio.Media.TITLE
+                MediaStore.Audio.Media.TITLE,
+                MediaStore.Audio.Media.DATA,
+                MediaStore.Audio.Media.RELATIVE_PATH
             )
-
-            val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
 
             val cursor = context.contentResolver.query(
                 collection,
@@ -683,18 +724,27 @@ class MainActivity : ComponentActivity() {
             cursor?.use {
                 val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                val pathColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
 
                 while (it.moveToNext()) {
                     val id = it.getLong(idColumn)
                     val title = it.getString(titleColumn)
+                    val path = it.getString(pathColumn) ?: ""
+                    Log.d("MUSIC_PATH", path)
+                    val relativePath = it.getString(pathColumn) ?: "Unknown"
 
                     val contentUri = Uri.withAppendedPath(collection, id.toString())
+
+                    val folder = relativePath
+                        .removeSuffix("/")
+                        .substringAfterLast("/")
 
                     list.add(
                         MusicItem(
                             title = title,
                             uri = contentUri,
-                            folder = if (volume == "external_primary") "Music" else "SDカード"
+                            folder = folder,
+                            path = path
                         )
                     )
                 }
