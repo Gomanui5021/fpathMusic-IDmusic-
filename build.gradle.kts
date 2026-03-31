@@ -13,7 +13,10 @@ android {
 
 dependencies {
     implementation("io.coil-kt:coil-compose:2.5.0")
+    implementation("androidx.media:media:1.6.0")
 }
+
+
 
     defaultConfig {
         applicationId = "com.example.idmusic"

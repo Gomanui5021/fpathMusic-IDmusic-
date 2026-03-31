@@ -49,7 +49,7 @@ class BluetoothServer(private val context: Context) : Thread() {
         thread {
             try {
                 musicList.forEach {
-                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}\n"
+                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}\n"
                     outputStream?.write(msg.toByteArray())
                 }
                 outputStream?.write("END\n".toByteArray())
@@ -193,8 +193,6 @@ class BluetoothServer(private val context: Context) : Thread() {
             }
 
             message == "DISCONNECT" -> {
-                Log.d("BT", "クライアント切断")
-
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_STOP
                 }
@@ -220,15 +218,6 @@ class BluetoothServer(private val context: Context) : Thread() {
         try {
             outputStream?.write((message + "\n").toByteArray())
             outputStream?.flush()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-
-    fun sendControlCommand(command: String) {
-        try {
-            BluetoothClient.instance?.sendMessage(command)
         } catch (e: Exception) {
             e.printStackTrace()
         }

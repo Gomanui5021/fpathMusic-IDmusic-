@@ -18,13 +18,13 @@ class BluetoothClient(private val context: Context) {
 
     var onConnected: (() -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
-    var onReceiveMusicList: ((List<Triple<String, String, String>>) -> Unit)? = null
+    var onReceiveMusicList: ((List<MusicItem>) -> Unit)? = null
     var onReceiveMessage: ((String) -> Unit)? = null
     var onDeviceNameReceived: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onProgress: ((Int, Int) -> Unit)? = null
 
-    private val tempList = mutableListOf<Triple<String, String, String>>()
+    private val tempList = mutableListOf<MusicItem>()
 
 
     companion object {
@@ -48,6 +48,8 @@ class BluetoothClient(private val context: Context) {
 
                     outputStream = s.outputStream
                     inputStream = s.inputStream
+
+                    instance = this
                 } ?: run {
                     onError?.invoke("ソケット作成失敗")
                     return@Thread
@@ -94,7 +96,7 @@ class BluetoothClient(private val context: Context) {
     }
     fun sendMessage(message: String) {
         try {
-            outputStream?.write(message.toByteArray(Charsets.UTF_8))
+            outputStream?.write((message + "\n").toByteArray(Charsets.UTF_8))
             outputStream?.flush()
         } catch (e: Exception) {
             e.printStackTrace()
@@ -207,14 +209,21 @@ class BluetoothClient(private val context: Context) {
             line.startsWith("ITEM:") -> {
                 val parts = line.removePrefix("ITEM:").split("||")
 
-                if (parts.size >= 4) {
+                if (parts.size >= 5) {
                     val folder = parts[0]
                     val title = parts[1]
                     val uri = parts[2]
                     val path = parts[3]
+                    val storage = parts[4]
 
                     tempList.add(
-                        Triple("$folder/$title", uri, path)
+                        MusicItem(
+                            title = title,
+                            uri = android.net.Uri.parse(uri),
+                            folder = folder,
+                            path = path,
+                            storage = storage
+                        )
                     )
                 }
             }
@@ -235,7 +244,7 @@ class BluetoothClient(private val context: Context) {
 
             line == "END" -> {
                 val result = tempList
-                    .sortedBy { it.first }
+                    .sortedWith(compareBy({ it.folder }, { it.title }))
                     .toList()
                 tempList.clear()
                 CoroutineScope(Dispatchers.Main).launch {
