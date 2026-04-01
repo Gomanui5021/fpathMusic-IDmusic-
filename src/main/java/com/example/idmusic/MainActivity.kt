@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
+import java.io.File
 
 
 class MainActivity : ComponentActivity() {
@@ -197,7 +198,6 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val bluetoothClient = remember { BluetoothClient(context) }
         var connectedDeviceName by remember { mutableStateOf("未接続") }
-        var connectionState by remember { mutableStateOf("未接続") }
         var deviceList by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
         var isConnected by remember { mutableStateOf(false) }
         var isPlaying by remember { mutableStateOf(false) }
@@ -206,14 +206,9 @@ class MainActivity : ComponentActivity() {
         var duration by remember { mutableStateOf(0) }
         var lastPosition by remember { mutableStateOf(0) }
         var lastUpdateTime by remember { mutableStateOf(System.currentTimeMillis()) }
-        var errorMessage by remember { mutableStateOf<String?>(null) }
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
         var connectingDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
-        var isConnecting by remember { mutableStateOf(false) }
-        var isMusicScreen by remember { mutableStateOf(false) }
-        var localMusicItems by remember { mutableStateOf(listOf<MusicItem>()) }
-        var btMusicItems by remember { mutableStateOf(listOf<MusicItem>()) }
 
         // 初期は空で、サーバーから受信して更新
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
@@ -227,14 +222,10 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(Unit) {
 
-            localMusicItems= getMusicList(context)
-            Log.d("MUSIC_SIZE", localMusicItems.size.toString())
-            Log.d("FOLDER_CHECK", localMusicItems.map { it.folder }.toString())
-
             bluetoothClient.onConnected = {
                 scope.launch {
                     isConnected = true
-                    connectingDevice = null   // ← これ絶対必要
+                    connectingDevice = null
                     snackbarHostState.showSnackbar("接続成功")
                 }
             }
@@ -242,16 +233,13 @@ class MainActivity : ComponentActivity() {
 
             bluetoothClient.onDisconnected = {
                 isConnected = false
-                isConnecting = false
-                connectionState = "未接続"
-
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_STOP
                 }
                 ContextCompat.startForegroundService(context, intent)
 
                 scope.launch {
-                    snackbarHostState.showSnackbar("接続完了")
+                    snackbarHostState.showSnackbar("接続終了")
                 }
             }
 
@@ -260,35 +248,43 @@ class MainActivity : ComponentActivity() {
             }
 
             bluetoothClient.onReceiveMessage = { message ->
-                when (message) {
-                    "PAUSED" -> isPlaying = false
-                    "RESUME" -> isPlaying = true
-                }
-
                 if (message.startsWith("STATE:")) {
-                    isPlaying = message.removePrefix("STATE:") == "PLAYING"
+                    val playing = message.removePrefix("STATE:") == "PLAYING"
+                    isPlaying = playing
+
+                    val intent = Intent(context, MusicService::class.java).apply {
+                        action = MusicService.ACTION_UPDATE_STATE
+                        putExtra("IS_PLAYING", playing)
+                        putExtra("POSITION", currentPosition)
+                        putExtra("TITLE", currentSongTitle)
+                        putExtra("DEVICE", connectedDeviceName)
+                    }
+                    ContextCompat.startForegroundService(context, intent)
                 }
             }
 
             bluetoothClient.onProgress = { pos, dur ->
                 val now = System.currentTimeMillis()
-
                 if (pos < lastPosition) lastPosition = 0
-
                 if (dur > 1000 && pos >= lastPosition) {
                     currentPosition = pos
                     duration = dur
                     lastPosition = pos
                     lastUpdateTime = now
+                    
+                    val intent = Intent(context, MusicService::class.java).apply {
+                        action = MusicService.ACTION_UPDATE_STATE
+                        putExtra("IS_PLAYING", isPlaying)
+                        putExtra("POSITION", pos)
+                        putExtra("DURATION", dur)
+                    }
+                    ContextCompat.startForegroundService(context, intent)
                 }
             }
 
             bluetoothClient.onError = { msg ->
                 scope.launch {
-                    snackbarHostState.showSnackbar(
-                        message = msg,
-                        duration = SnackbarDuration.Short
-                    )
+                    snackbarHostState.showSnackbar(message = msg)
                 }
             }
 
@@ -296,23 +292,19 @@ class MainActivity : ComponentActivity() {
             deviceList = adapter?.bondedDevices?.toList() ?: emptyList()
         }
 
-        errorMessage?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(8.dp)
-            )
-        }
-
-        LaunchedEffect(isPlaying, isConnected) {
-            while (isPlaying && isConnected) {
-                delay(1000)
-
-                val now = System.currentTimeMillis()
-                val diff = (now - lastUpdateTime).toInt()
-
-                currentPosition = (currentPosition + diff).coerceIn(0, duration)
-                lastUpdateTime = now
+        LaunchedEffect(isConnected) { // isPlayingをキーから外して無限ループを避ける
+            while (isConnected) {
+                val service = MusicService.instance
+                if (service != null) {
+                    isPlaying = service.isPlaying() // サービスの状態をUIに反映
+                    if (isPlaying) {
+                        val now = System.currentTimeMillis()
+                        val diff = (now - lastUpdateTime).toInt()
+                        currentPosition = (currentPosition + diff).coerceIn(0, duration)
+                        lastUpdateTime = now
+                    }
+                }
+                delay(500)
             }
         }
 
@@ -331,7 +323,7 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding) // ← これ超重要！
+                    .padding(padding)
                     .systemBarsPadding()
             ) {
 
@@ -339,14 +331,11 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth().padding(8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-
                     if (!isConnected) {
                         Button(onClick = { onDisconnect() }) {
                             Text("← 戻る")
                         }
                     }
-
-
                 }
 
                 val expandedState = remember { mutableStateMapOf<String, Boolean>() }
@@ -354,21 +343,12 @@ class MainActivity : ComponentActivity() {
                 if (!isConnected) {
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         items(deviceList) { device ->
-
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
                                         connectingDevice = device
-
-                                        val deviceName = device.name ?: "不明"
-                                        connectedDeviceName = deviceName
-                                        connectionState = "$deviceName へ接続中..."
-
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(connectionState)
-                                        }
-
+                                        connectedDeviceName = device.name ?: "不明"
                                         scope.launch(Dispatchers.IO) {
                                             bluetoothClient.connect(device)
                                         }
@@ -376,19 +356,9 @@ class MainActivity : ComponentActivity() {
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-
-                                // デバイス名（1回だけ！）
-                                Text(
-                                    text = device.name ?: "不明",
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                // 接続中のときだけ表示
+                                Text(text = device.name ?: "不明", modifier = Modifier.weight(1f))
                                 if (connectingDevice == device) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 }
                             }
                         }
@@ -413,7 +383,6 @@ class MainActivity : ComponentActivity() {
                             if (isExpanded) {
                                 items(songs) { song ->
                                     val isCurrent = song.title == currentSongTitle
-
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -423,45 +392,26 @@ class MainActivity : ComponentActivity() {
                                                 currentSongTitle = song.title
                                                 isPlaying = true
 
-
-                                                // 通知権限チェック
                                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                                    ContextCompat.checkSelfPermission(
-                                                        context,
-                                                        Manifest.permission.POST_NOTIFICATIONS
-                                                    )
-                                                    != PackageManager.PERMISSION_GRANTED
+                                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                                                 ) {
                                                     notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                                 }
 
-                                                val intent = Intent(
-                                                    context,
-                                                    MusicService::class.java
-                                                ).apply {
-                                                    action = MusicService.ACTION_PLAY
-                                                    putExtra("MUSIC_URI", song.uri.toString())
+                                                val intent = Intent(context, MusicService::class.java).apply {
+                                                    action = MusicService.ACTION_UPDATE_STATE
+                                                    putExtra("IS_PLAYING", true)
                                                     putExtra("TITLE", song.title)
                                                     putExtra("DEVICE", connectedDeviceName)
                                                 }
-                                                ContextCompat.startForegroundService(
-                                                    context,
-                                                    intent
-                                                )
+                                                ContextCompat.startForegroundService(context, intent)
                                             }
                                             .padding(12.dp)
                                     ) {
-
-                                        // 🎵 タイトル
                                         Text(
                                             text = if (isCurrent) "▶ ${song.title}" else song.title,
-                                            color = if (isCurrent)
-                                                MaterialTheme.colorScheme.primary
-                                            else
-                                                MaterialTheme.colorScheme.onBackground
+                                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
                                         )
-
-                                        // 📁 パス（小さく）
                                         Text(
                                             text = "[${song.storage}] ${song.path}",
                                             fontSize = 12.sp,
@@ -470,10 +420,7 @@ class MainActivity : ComponentActivity() {
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    Divider(
-                                        thickness = 2.dp,
-                                        color = Color.Gray
-                                    )
+                                    HorizontalDivider(thickness = 2.dp, color = Color.Gray)
                                 }
                             }
                         }
@@ -485,7 +432,6 @@ class MainActivity : ComponentActivity() {
                             .padding(8.dp),
                         elevation = CardDefaults.cardElevation(8.dp)
                     ) {
-
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             if (currentSongTitle != null) {
                                 Text(
@@ -498,24 +444,24 @@ class MainActivity : ComponentActivity() {
                             Text("接続デバイス: $connectedDeviceName")
 
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp)
-                                    .navigationBarsPadding(),
+                                modifier = Modifier.fillMaxWidth().padding(12.dp).navigationBarsPadding(),
                                 horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
                                 Button(
                                     onClick = {
-                                        val intent = Intent(context, MusicService::class.java)
                                         if (isPlaying) {
                                             bluetoothClient.sendPause()
-                                            intent.action = MusicService.ACTION_PAUSE
                                             isPlaying = false
                                         } else {
                                             bluetoothClient.sendResume()
-                                            intent.action = MusicService.ACTION_RESUME
                                             isPlaying = true
                                         }
-                                        intent.putExtra("TITLE", currentSongTitle)
-                                        intent.putExtra("DEVICE", connectedDeviceName)
+                                        val intent = Intent(context, MusicService::class.java).apply {
+                                            action = MusicService.ACTION_UPDATE_STATE
+                                            putExtra("IS_PLAYING", isPlaying)
+                                            putExtra("TITLE", currentSongTitle)
+                                            putExtra("DEVICE", connectedDeviceName)
+                                        }
                                         ContextCompat.startForegroundService(context, intent)
                                     }
                                 ) { Text(if (isPlaying) "⏸" else "▶") }
@@ -523,73 +469,39 @@ class MainActivity : ComponentActivity() {
                                 Button(onClick = {
                                     bluetoothClient.sendDisconnect()
                                     bluetoothClient.disconnect()
-
                                     isConnected = false
                                     isPlaying = false
-                                    currentSongTitle = null
-                                    currentPosition = 0
-                                    duration = 0
-
                                     val intent = Intent(context, MusicService::class.java).apply {
-                                        action = MusicService.ACTION_PAUSE
+                                        action = MusicService.ACTION_STOP
                                     }
                                     ContextCompat.startForegroundService(context, intent)
-
                                 }) { Text("切断") }
                             }
                         }
 
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 24.dp) // ← 下に余白
-                        ) {
-
-                            val sliderValue = if (duration > 0) {
-                                currentPosition.toFloat() / duration.toFloat()
-                            } else 0f
-
-                            if (musicItems.isNotEmpty() && duration > 0) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                            val sliderValue = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f
+                            if (duration > 0) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp)
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                                 ) {
-
-                                    // 左：現在時間
-                                    Text(
-                                        text = formatTime(currentPosition),
-                                        modifier = Modifier.width(50.dp)
-                                    )
-
-                                    // 中央：シークバー
+                                    Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
                                     Slider(
                                         value = sliderValue,
-                                        onValueChange = {
-                                            currentPosition = (it * duration).toInt()
-                                        },
-                                        onValueChangeFinished = {
-                                            bluetoothClient.sendSeek(currentPosition)
-                                        },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .padding(horizontal = 8.dp)
+                                        onValueChange = { currentPosition = (it * duration).toInt() },
+                                        onValueChangeFinished = { bluetoothClient.sendSeek(currentPosition) },
+                                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                                     )
-
-                                    // 右：総時間
-                                    Text(
-                                        text = formatTime(duration),
-                                        modifier = Modifier.width(50.dp)
-                                    )
+                                    Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
                                 }
                             }
                         }
                     }
                 }
+            }
         }
     }
-        }
 
     // ---------------- Server ----------------
     @Composable
@@ -606,30 +518,23 @@ class MainActivity : ComponentActivity() {
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
         val musicList = remember { getMusicList(context) }
-        var onDisconnected: (() -> Unit)? = null
 
         fun getAlbumArt(context: Context, musicUri: Uri): Uri? {
             return try {
                 val mmr = android.media.MediaMetadataRetriever()
                 mmr.setDataSource(context, musicUri)
-
                 val art = mmr.embeddedPicture
                 if (art != null) {
-                    // バイト配列 → 一時URIに変換
-                    val file = kotlin.io.path.createTempFile().toFile()
+                    val file = File.createTempFile("albumart", ".jpg", context.cacheDir)
                     file.writeBytes(art)
                     Uri.fromFile(file)
-                } else {
-                    null
-                }
+                } else null
             } catch (e: Exception) {
-                e.printStackTrace()
                 null
             }
         }
 
         var albumArtUri by remember { mutableStateOf<Uri?>(null) }
-
 
         fun formatTime(ms: Int): String {
             val totalSec = ms / 1000
@@ -641,32 +546,30 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             server.setMusicList(musicList)
             server.start()
-
-            server.onDeviceNameReceived = { name ->
-                CoroutineScope(Dispatchers.Main).launch {
-                    clientName = name
-                }
-            }
-
-            server.onConnected = {
-                CoroutineScope(Dispatchers.Main).launch {
-                    isConnected = true
-                }
-            }
-
+            server.onDeviceNameReceived = { name -> CoroutineScope(Dispatchers.Main).launch { clientName = name } }
+            server.onConnected = { CoroutineScope(Dispatchers.Main).launch { isConnected = true } }
             server.onPlay = { value ->
                 CoroutineScope(Dispatchers.Main).launch {
-                    when (value) {
-                        "PAUSED" -> isPlaying = false
-                        "RESUME" -> isPlaying = true
-                        else -> {
-                            val found = musicList.find { it.uri.toString() == value }
-                            playingTitle = found?.title ?: value
-                            isPlaying = true
-
-                            // 👇 追加：ジャケット取得
-                            albumArtUri = found?.let { getAlbumArt(context, it.uri) }
+                    if (value == "PAUSED") {
+                        isPlaying = false
+                        return@launch
+                    }
+                    if (value == "RESUME") {
+                        isPlaying = true
+                        return@launch
+                    }
+                    val found = musicList.find { it.uri.toString() == value }
+                    if (found != null) {
+                        val intent = Intent(context, MusicService::class.java).apply {
+                            action = MusicService.ACTION_PLAY
+                            putExtra("MUSIC_URI", found.uri.toString())
+                            putExtra("TITLE", found.title)
+                            putExtra("DEVICE", "Client")
                         }
+                        ContextCompat.startForegroundService(context, intent)
+                        albumArtUri = getAlbumArt(context, found.uri)
+                        playingTitle = found.title
+                        isPlaying = true
                     }
                 }
             }
@@ -676,26 +579,24 @@ class MainActivity : ComponentActivity() {
                     clientName = "未接続"
                     playingTitle = null
                     isPlaying = false
-
-                    scope.launch {
-                        snackbarHostState.showSnackbar("接続が切断されました")
-                    }
+                    snackbarHostState.showSnackbar("接続が切断されました")
                     delay(500)
                     onCancel()
                 }
             }
         }
 
-        LaunchedEffect(isConnected, isPlaying) {
+        LaunchedEffect(isConnected) {
             while (isConnected) {
                 val service = MusicService.instance
-
-                if (service != null && service.getDuration() > 0) {
-                    currentPosition = service.getCurrentPosition()
-                    duration = service.getDuration()
+                if (service != null) {
+                    isPlaying = service.isPlaying() // サーバー側もサービスの状態を常に同期
+                    if (service.getDuration() > 0) {
+                        currentPosition = service.getCurrentPosition()
+                        duration = service.getDuration()
+                    }
                 }
-
-                kotlinx.coroutines.delay(500)
+                delay(500)
             }
         }
 
@@ -703,89 +604,48 @@ class MainActivity : ComponentActivity() {
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { padding ->
             Column(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().padding(padding),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(if (isConnected) "接続成功" else "待機中")
                 Text("接続相手: $clientName")
-
-
                 Spacer(modifier = Modifier.height(16.dp))
-
                 Image(
-                    painter = rememberAsyncImagePainter(
-                        model = albumArtUri ?: R.drawable.no_image // ← fallback
-                    ),
+                    painter = rememberAsyncImagePainter(model = albumArtUri ?: R.drawable.no_image),
                     contentDescription = "Album Art",
-                    modifier = Modifier
-                        .size(250.dp)
-                        .padding(16.dp),
+                    modifier = Modifier.size(250.dp).padding(16.dp),
                     contentScale = ContentScale.Fit
                 )
-
                 Spacer(modifier = Modifier.height(16.dp))
-
                 playingTitle?.let {
                     Text("再生中: $it")
-
                     Button(onClick = {
                         if (isPlaying) {
                             server.pauseMusic()
-                            server.onPlay?.invoke("PAUSED")
                         } else {
                             server.resumeMusic()
-                            server.onPlay?.invoke("RESUME")
                         }
-                    }) {
-                        Text(if (isPlaying) "⏸" else "▶")
-                    }
+                        // UI状態はLaunchedEffect内のループでサービスから同期されるのでここでは更新しない
+                    }) { Text(if (isPlaying) "⏸" else "▶") }
                 }
-
                 if (duration > 0) {
                     val sliderValue = currentPosition.toFloat() / duration.toFloat()
-
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                     ) {
-
-                        // 左：現在時間
-                        Text(
-                            text = formatTime(currentPosition),
-                            modifier = Modifier.width(50.dp)
-                        )
-
-                        // 中央：シークバー
+                        Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
                         Slider(
                             value = sliderValue,
-                            onValueChange = {
-                                currentPosition = (it * duration).toInt()
-                            },
-                            onValueChangeFinished = {
-                                server.seekTo(currentPosition)
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 8.dp)
+                            onValueChange = { currentPosition = (it * duration).toInt() },
+                            onValueChangeFinished = { server.seekTo(currentPosition) },
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                         )
-
-                        // 右：総時間
-                        Text(
-                            text = formatTime(duration),
-                            modifier = Modifier.width(50.dp)
-                        )
+                        Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
                     }
                 }
-
-                Button(onClick = {
-                    server.stopServer()
-                    onCancel()
-                }) {
-                    Text("切断")
-                }
+                Button(onClick = { server.stopServer(); onCancel() }) { Text("切断") }
             }
         }
     }
@@ -794,68 +654,42 @@ class MainActivity : ComponentActivity() {
     // ---------------- Music List ----------------
     fun getMusicList(context: Context): List<MusicItem> {
         val list = mutableListOf<MusicItem>()
-
-        val volumes = MediaStore.getExternalVolumeNames(context)
+        val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.getExternalVolumeNames(context)
+        } else setOf("external")
 
         for (volume in volumes) {
-
             val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
-
             val collection = MediaStore.Audio.Media.getContentUri(volume)
-
-            val storageType = if (volume == "external_primary") {
-                "内部"
-            } else {
-                "SD"
-            }
-
-
+            val storageType = if (volume == "external_primary" || volume == "external") "内部" else "SD"
             val projection = arrayOf(
                 MediaStore.Audio.Media._ID,
                 MediaStore.Audio.Media.TITLE,
                 MediaStore.Audio.Media.DATA,
                 MediaStore.Audio.Media.RELATIVE_PATH
             )
-
-            val cursor = context.contentResolver.query(
-                collection,
-                projection,
-                selection,
-                null,
-                null
-            )
-
+            val cursor = context.contentResolver.query(collection, projection, selection, null, null)
             cursor?.use {
                 val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val pathColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
+                val pathColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
+                } else it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
 
                 while (it.moveToNext()) {
                     val id = it.getLong(idColumn)
                     val title = it.getString(titleColumn)
                     val path = it.getString(pathColumn) ?: ""
-                    Log.d("MUSIC_PATH", path)
-                    val relativePath = it.getString(pathColumn) ?: "Unknown"
+                    val relativePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        it.getString(pathColumn) ?: "Unknown"
+                    } else path.substringBeforeLast("/", "Unknown")
 
                     val contentUri = Uri.withAppendedPath(collection, id.toString())
-
-                    val folder = relativePath
-                        .removeSuffix("/")
-                        .substringAfterLast("/")
-
-                    list.add(
-                        MusicItem(
-                            title = title,
-                            uri = contentUri,
-                            folder = folder,
-                            path = path,
-                            storage = storageType
-                        )
-                    )
+                    val folder = relativePath.removeSuffix("/").substringAfterLast("/")
+                    list.add(MusicItem(title = title, uri = contentUri, folder = folder, path = path, storage = storageType))
                 }
             }
         }
-
         return list
     }
-    }
+}

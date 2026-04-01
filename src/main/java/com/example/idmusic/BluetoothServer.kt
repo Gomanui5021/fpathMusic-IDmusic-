@@ -45,6 +45,15 @@ class BluetoothServer(private val context: Context) : Thread() {
         musicListToSend = list
     }
 
+    fun sendMessage(message: String) {
+        try {
+            outputStream?.write((message + "\n").toByteArray())
+            outputStream?.flush()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun sendMusicList(musicList: List<MusicItem>) {
         thread {
             try {
