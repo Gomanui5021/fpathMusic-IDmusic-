@@ -12,8 +12,12 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.*
 import kotlin.concurrent.thread
-import kotlin.text.Charsets
 import com.example.idmusic.MusicService
+import java.io.BufferedReader
+import java.io.BufferedWriter
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.util.concurrent.Executors
 
 class BluetoothServer(private val context: Context) : Thread() {
 
@@ -25,48 +29,62 @@ class BluetoothServer(private val context: Context) : Thread() {
     private val uuid = UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315")
 
     private var lastState: String? = null
+    private var isRunning = true
 
+    private var serverSocket: BluetoothServerSocket? = null
     private var socket: BluetoothSocket? = null
-    private var inputStream: InputStream? = null
-    private var outputStream: OutputStream? = null
+    private var writer: BufferedWriter? = null
+    private var reader: BufferedReader? = null
+    
+    private val sendExecutor = Executors.newSingleThreadExecutor()
 
     var onConnected: (() -> Unit)? = null
     var onPlay: ((String) -> Unit)? = null
-    var onDeviceNameReceived: ((String) -> Unit)? = null
-
+    var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
 
-    var onProgress: ((Int, Int) -> Unit)? = null
-
     private var musicListToSend: List<MusicItem> = emptyList()
-    private var receiveBuffer = ""
 
     fun setMusicList(list: List<MusicItem>) {
         musicListToSend = list
     }
 
     fun sendMessage(message: String) {
-        try {
-            outputStream?.write((message + "\n").toByteArray())
-            outputStream?.flush()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (!isRunning) return
+        sendExecutor.execute {
+            try {
+                synchronized(this) {
+                    writer?.let {
+                        it.write(message + "\n")
+                        it.flush()
+                    }
+                }
+            } catch (e: Exception) {
+                if (isRunning) Log.e("BT", "sendMessage Error", e)
+            }
         }
     }
 
     private fun sendMusicList(musicList: List<MusicItem>) {
-        thread {
+        sendExecutor.execute {
             try {
                 musicList.forEach {
-                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}\n"
-                    outputStream?.write(msg.toByteArray())
+                    if (!isRunning) return@execute
+                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}"
+                    synchronized(this) {
+                        writer?.write(msg + "\n")
+                    }
                 }
-                outputStream?.write("END\n".toByteArray())
-                outputStream?.flush()
-
-                Log.d("BT", "全曲送信完了")
+                if (!isRunning) return@execute
+                synchronized(this) {
+                    writer?.write("END\n")
+                    writer?.flush()
+                }
             } catch (e: Exception) {
-                Log.e("BT", "曲リスト送信失敗", e)
+                if (isRunning) {
+                    Log.e("BT", "sendMusicList Error", e)
+                    stopServer()
+                }
             }
         }
     }
@@ -74,69 +92,43 @@ class BluetoothServer(private val context: Context) : Thread() {
     override fun run() {
         try {
             instance = this
-            val serverSocket =
-                adapter?.listenUsingRfcommWithServiceRecord("IDMusic", uuid)
-
-            Log.d("BT", "サーバー待機中...")
-
+            serverSocket = adapter?.listenUsingRfcommWithServiceRecord("IDMusic", uuid)
             socket = serverSocket?.accept() ?: return
+            
+            synchronized(this) {
+                writer = BufferedWriter(OutputStreamWriter(socket?.outputStream, Charsets.UTF_8))
+                reader = BufferedReader(InputStreamReader(socket?.inputStream, Charsets.UTF_8))
+            }
+            
+            // acceptした後はサーバーソケットは不要
+            try { serverSocket?.close() } catch(_: Exception) {}
+            serverSocket = null
 
-            outputStream = socket?.outputStream
-            inputStream = socket?.inputStream
-            serverSocket?.close()
-
-            Log.d("BT", "接続成功")
             onConnected?.invoke()
-
             sendMusicList(musicListToSend)
-
             listenIncoming()
-
-            // 👇 これ追加（超重要）
             startProgressSender()
-
         } catch (e: Exception) {
-            Log.e("BT", "サーバー例外", e)
+            if (isRunning) Log.e("BT", "Server Run Error", e)
+            stopServer()
         }
     }
 
     fun sendProgress(position: Int, duration: Int) {
-        try {
-            val msg = "PROGRESS:$position||$duration\n"
-            outputStream?.write(msg.toByteArray())
-            outputStream?.flush()
-
-            Log.d("BT", "PROGRESS送信: $position / $duration")
-
-        } catch (e: Exception) {
-            Log.e("BT", "進捗送信失敗", e)
-        }
+        if (duration <= 0) return
+        sendMessage("PROGRESS:$position||$duration")
     }
 
     private fun listenIncoming() {
         thread {
-            val buffer = ByteArray(4096)
             try {
-                while (true) {
-                    val bytes = inputStream?.read(buffer) ?: break
-                    if (bytes <= 0) break
-                    receiveBuffer += String(buffer, 0, bytes)
-                    while (true) {
-                        val newline = receiveBuffer.indexOf("\n")
-                        if (newline == -1) break
-                        val line = receiveBuffer.substring(0, newline).trim()
-                        receiveBuffer = receiveBuffer.substring(newline + 1)
-                        if (line.isNotEmpty()) handleMessage(line)
-                    }
+                while (isRunning) {
+                    val line = reader?.readLine() ?: break
+                    if (line.isNotEmpty()) handleMessage(line)
                 }
             } catch (e: Exception) {
-                Log.e("BT", "受信エラー", e)
-
-                val intent = Intent(context, MusicService::class.java).apply {
-                    action = MusicService.ACTION_STOP
-                }
-                ContextCompat.startForegroundService(context, intent)
-
+                if (isRunning) Log.e("BT", "Listen Error", e)
+            } finally {
                 onDisconnected?.invoke()
                 stopServer()
             }
@@ -144,182 +136,114 @@ class BluetoothServer(private val context: Context) : Thread() {
     }
 
     private fun handleMessage(message: String) {
-        Log.d("BT", "受信: $message")
-
         when {
-            // 🔥 これを一番上に追加
             message.startsWith("NAME:") -> {
-                val name = message.removePrefix("NAME:")
-                Log.d("BT", "名前受信処理: $name")
-                onDeviceNameReceived?.invoke(name)
+                val clientName = message.removePrefix("NAME:")
+                onClientNameReceived?.invoke(clientName)
             }
-
             message.startsWith("PLAY:") -> {
                 val path = message.removePrefix("PLAY:")
-
                 sendState("PLAYING")
-                onPlay?.invoke(path)
-
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_PLAY
                     putExtra("MUSIC_URI", path)
-                    putExtra("TITLE", path)
-                    putExtra("DEVICE", "接続中")
                 }
-                ContextCompat.startForegroundService(context, intent)
+                context.startService(intent)
+                onPlay?.invoke(path)
             }
-
-            message.startsWith("PAUSE") -> {
+            message == "PAUSE" -> {
                 sendState("PAUSED")
+                val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_REMOTE_PAUSE }
+                context.startService(intent)
                 onPlay?.invoke("PAUSED")
-
-                val intent = Intent(context, MusicService::class.java).apply {
-                    action = MusicService.ACTION_PAUSE
-                }
-                ContextCompat.startForegroundService(context, intent)
             }
-
-            message.startsWith("RESUME") -> {
+            message == "RESUME" -> {
                 sendState("PLAYING")
+                val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_REMOTE_RESUME }
+                context.startService(intent)
                 onPlay?.invoke("RESUME")
-
-                val intent = Intent(context, MusicService::class.java).apply {
-                    action = MusicService.ACTION_RESUME
-                }
-                ContextCompat.startForegroundService(context, intent)
             }
-
-            message.startsWith("PROGRESS:") -> {
-                val data = message.removePrefix("PROGRESS:")
-                val parts = data.split("||")
-
-                if (parts.size == 2) {
-                    val pos = parts[0].toInt()
-                    val dur = parts[1].toInt()
-
-                    onProgress?.invoke(pos, dur)
-                }
-            }
-
-            message == "DISCONNECT" -> {
-                val intent = Intent(context, MusicService::class.java).apply {
-                    action = MusicService.ACTION_STOP
-                }
-                ContextCompat.startForegroundService(context, intent)
-
-                stopServer()
-                onDisconnected?.invoke()
-            }
-
             message.startsWith("SEEK:") -> {
                 val pos = message.removePrefix("SEEK:").toIntOrNull() ?: 0
-
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_SEEK
                     putExtra("SEEK_POS", pos)
                 }
-                ContextCompat.startForegroundService(context, intent)
+                context.startService(intent)
+            }
+            message == "DISCONNECT" -> {
+                stopServer()
             }
         }
     }
 
-    fun send(message: String) {
-        try {
-            outputStream?.write((message + "\n").toByteArray())
-            outputStream?.flush()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
+    fun send(message: String) = sendMessage(message)
 
     fun pauseMusic() {
-        try {
-            sendState("PAUSED")
-            onPlay?.invoke("PAUSED")
-
-            val intent = Intent(context, MusicService::class.java).apply {
-                action = MusicService.ACTION_PAUSE
-            }
-            ContextCompat.startForegroundService(context, intent)
-
-        } catch (e: Exception) {
-            Log.e("BT", "pauseMusicエラー", e)
-        }
+        sendState("PAUSED")
+        val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_PAUSE }
+        context.startService(intent)
     }
 
     fun resumeMusic() {
-        try {
-            sendState("PLAYING")
-            onPlay?.invoke("RESUME")
+        sendState("PLAYING")
+        val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_RESUME }
+        context.startService(intent)
+    }
 
-            val intent = Intent(context, MusicService::class.java).apply {
-                action = MusicService.ACTION_RESUME
+    fun stopServer() {
+        if (!isRunning) return
+        isRunning = false
+        instance = null
+        
+        // メメインスレッドをブロックしないよう、リソースのクローズもスレッドで行う
+        thread {
+            synchronized(this) {
+                try {
+                    serverSocket?.close()
+                    socket?.close()
+                    reader?.close()
+                    writer?.close()
+                } catch (_: Exception) {}
+                serverSocket = null
+                socket = null
+                reader = null
+                writer = null
             }
-            ContextCompat.startForegroundService(context, intent)
-
-        } catch (e: Exception) {
-            Log.e("BT", "resumeMusicエラー", e)
+            try { sendExecutor.shutdownNow() } catch(_: Exception) {}
         }
     }
 
-    fun sendDisconnect() {
-        send("DISCONNECT")
-    }
-
     fun seekTo(position: Int) {
-        MusicService.instance?.seekTo(position)
-        send("SEEK:$position") // ← クライアントへ通知
+        val intent = Intent(context, MusicService::class.java).apply {
+            action = MusicService.ACTION_SEEK
+            putExtra("SEEK_POS", position)
+        }
+        context.startService(intent)
+        send("SEEK:$position")
     }
 
     fun sendState(state: String) {
         if (state == lastState) return
-
         lastState = state
-
-        try {
-            outputStream?.write("STATE:$state\n".toByteArray())
-            outputStream?.flush()
-            Log.d("BT", "STATE送信: $state")
-        } catch (e: Exception) {
-            Log.e("BT", "STATE送信失敗", e)
-        }
+        sendMessage("STATE:$state")
     }
 
-    private var isRunning = true
-
-    fun startProgressSender() {
+    private fun startProgressSender() {
         thread {
             while (isRunning) {
                 try {
                     val service = MusicService.instance
-
-                    if (service != null &&
-                        service.isPlaying() &&
-                        service.getDuration() > 1000
-                    ) {
+                    if (service != null && service.isPlaying()) {
                         val pos = service.getCurrentPosition()
                         val dur = service.getDuration()
-
-                        sendProgress(pos, dur)
+                        if (dur > 0) sendProgress(pos, dur)
                     }
-
-                    Thread.sleep(500)
-
                 } catch (e: Exception) {
-                    Log.e("BT", "進捗送信エラー", e)
-                    break
+                    if (isRunning) Log.e("BT", "Progress Sender Error", e)
                 }
+                Thread.sleep(500)
             }
         }
-    }
-
-    fun stopServer() {
-        isRunning = false
-
-        try { inputStream?.close() } catch (_: Exception) {}
-        try { outputStream?.close() } catch (_: Exception) {}
-        try { socket?.close() } catch (_: Exception) {}
-
-        Log.d("BT", "サーバー停止")
     }
 }

@@ -202,6 +202,7 @@ class MainActivity : ComponentActivity() {
         var isConnected by remember { mutableStateOf(false) }
         var isPlaying by remember { mutableStateOf(false) }
         var currentSongTitle by remember { mutableStateOf<String?>(null) }
+        var currentSongUri by remember { mutableStateOf<String?>(null) }
         var currentPosition by remember { mutableStateOf(0) }
         var duration by remember { mutableStateOf(0) }
         var lastPosition by remember { mutableStateOf(0) }
@@ -218,6 +219,12 @@ class MainActivity : ComponentActivity() {
             val window = (view.context as android.app.Activity).window
             window.statusBarColor = android.graphics.Color.WHITE
             WindowCompat.getInsetsController(window, view)?.isAppearanceLightStatusBars = true
+        }
+
+        DisposableEffect(Unit) {
+            onDispose {
+                bluetoothClient.disconnect()
+            }
         }
 
         LaunchedEffect(Unit) {
@@ -256,6 +263,7 @@ class MainActivity : ComponentActivity() {
                         action = MusicService.ACTION_UPDATE_STATE
                         putExtra("IS_PLAYING", playing)
                         putExtra("POSITION", currentPosition)
+                        putExtra("DURATION", duration)
                         putExtra("TITLE", currentSongTitle)
                         putExtra("DEVICE", connectedDeviceName)
                     }
@@ -265,10 +273,11 @@ class MainActivity : ComponentActivity() {
 
             bluetoothClient.onProgress = { pos, dur ->
                 val now = System.currentTimeMillis()
-                if (pos < lastPosition) lastPosition = 0
-                if (dur > 1000 && pos >= lastPosition) {
-                    currentPosition = pos
+                
+                // シークバーが表示されるようにdurationを更新
+                if (dur > 0) {
                     duration = dur
+                    currentPosition = pos
                     lastPosition = pos
                     lastUpdateTime = now
                     
@@ -277,6 +286,8 @@ class MainActivity : ComponentActivity() {
                         putExtra("IS_PLAYING", isPlaying)
                         putExtra("POSITION", pos)
                         putExtra("DURATION", dur)
+                        putExtra("TITLE", currentSongTitle)
+                        putExtra("DEVICE", connectedDeviceName)
                     }
                     ContextCompat.startForegroundService(context, intent)
                 }
@@ -292,11 +303,11 @@ class MainActivity : ComponentActivity() {
             deviceList = adapter?.bondedDevices?.toList() ?: emptyList()
         }
 
-        LaunchedEffect(isConnected) { // isPlayingをキーから外して無限ループを避ける
+        LaunchedEffect(isConnected) {
             while (isConnected) {
                 val service = MusicService.instance
                 if (service != null) {
-                    isPlaying = service.isPlaying() // サービスの状態をUIに反映
+                    isPlaying = service.isPlaying()
                     if (isPlaying) {
                         val now = System.currentTimeMillis()
                         val diff = (now - lastUpdateTime).toInt()
@@ -370,19 +381,23 @@ class MainActivity : ComponentActivity() {
                         grouped.forEach { (folder, songs) ->
                             val isExpanded = expandedState[folder] ?: false
                             item {
-                                Text(
-                                    text = if (isExpanded) "📂 $folder" else "📁 $folder",
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .border(width = 1.dp, Color.Black)
                                         .height(56.dp)
                                         .clickable { expandedState[folder] = !isExpanded }
-                                        .padding(8.dp)
-                                )
+                                        .padding(horizontal = 8.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        text = if (isExpanded) "📂 $folder" else "📁 $folder"
+                                    )
+                                }
                             }
                             if (isExpanded) {
                                 items(songs) { song ->
-                                    val isCurrent = song.title == currentSongTitle
+                                    val isCurrent = song.uri.toString() == currentSongUri
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -390,7 +405,10 @@ class MainActivity : ComponentActivity() {
                                             .clickable {
                                                 bluetoothClient.sendPlay(song.uri.toString())
                                                 currentSongTitle = song.title
+                                                currentSongUri = song.uri.toString()
                                                 isPlaying = true
+                                                duration = 0 // 新しい曲なので一旦リセット
+                                                currentPosition = 0
 
                                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                                                     ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -403,6 +421,7 @@ class MainActivity : ComponentActivity() {
                                                     putExtra("IS_PLAYING", true)
                                                     putExtra("TITLE", song.title)
                                                     putExtra("DEVICE", connectedDeviceName)
+                                                    putExtra("DURATION", 0)
                                                 }
                                                 ContextCompat.startForegroundService(context, intent)
                                             }
@@ -461,6 +480,7 @@ class MainActivity : ComponentActivity() {
                                             putExtra("IS_PLAYING", isPlaying)
                                             putExtra("TITLE", currentSongTitle)
                                             putExtra("DEVICE", connectedDeviceName)
+                                            putExtra("DURATION", duration)
                                         }
                                         ContextCompat.startForegroundService(context, intent)
                                     }
@@ -468,33 +488,28 @@ class MainActivity : ComponentActivity() {
 
                                 Button(onClick = {
                                     bluetoothClient.sendDisconnect()
-                                    bluetoothClient.disconnect()
-                                    isConnected = false
-                                    isPlaying = false
-                                    val intent = Intent(context, MusicService::class.java).apply {
-                                        action = MusicService.ACTION_STOP
-                                    }
-                                    ContextCompat.startForegroundService(context, intent)
+                                    // isConnected = false // これは bluetoothClient.onDisconnected で行う
                                 }) { Text("切断") }
                             }
                         }
 
                         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                            // durationが0 poolでもスライダーを表示するか、あるいはdurationが届くのを待つ
                             val sliderValue = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f
-                            if (duration > 0) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                                ) {
-                                    Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
-                                    Slider(
-                                        value = sliderValue,
-                                        onValueChange = { currentPosition = (it * duration).toInt() },
-                                        onValueChangeFinished = { bluetoothClient.sendSeek(currentPosition) },
-                                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                                    )
-                                    Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
-                                }
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            ) {
+                                Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
+                                Slider(
+                                    value = sliderValue,
+                                    onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
+                                    onValueChangeFinished = { if (duration > 0) bluetoothClient.sendSeek(currentPosition) },
+                                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                    enabled = duration > 0
+                                )
+                                Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
                             }
                         }
                     }
@@ -512,6 +527,7 @@ class MainActivity : ComponentActivity() {
         var clientName by remember { mutableStateOf("未接続") }
         var isConnected by remember { mutableStateOf(false) }
         var playingTitle by remember { mutableStateOf<String?>(null) }
+        var currentSongUri by remember { mutableStateOf<String?>(null) }
         var isPlaying by remember { mutableStateOf(false) }
         var currentPosition by remember { mutableStateOf(0) }
         var duration by remember { mutableStateOf(0) }
@@ -543,10 +559,16 @@ class MainActivity : ComponentActivity() {
             return "%02d:%02d".format(min, sec)
         }
 
+        DisposableEffect(Unit) {
+            onDispose {
+                server.stopServer()
+            }
+        }
+
         LaunchedEffect(Unit) {
             server.setMusicList(musicList)
             server.start()
-            server.onDeviceNameReceived = { name -> CoroutineScope(Dispatchers.Main).launch { clientName = name } }
+            server.onClientNameReceived = { name -> CoroutineScope(Dispatchers.Main).launch { clientName = name } }
             server.onConnected = { CoroutineScope(Dispatchers.Main).launch { isConnected = true } }
             server.onPlay = { value ->
                 CoroutineScope(Dispatchers.Main).launch {
@@ -567,6 +589,7 @@ class MainActivity : ComponentActivity() {
                             putExtra("DEVICE", "Client")
                         }
                         ContextCompat.startForegroundService(context, intent)
+                        currentSongUri = found.uri.toString()
                         albumArtUri = getAlbumArt(context, found.uri)
                         playingTitle = found.title
                         isPlaying = true
@@ -578,8 +601,16 @@ class MainActivity : ComponentActivity() {
                     isConnected = false
                     clientName = "未接続"
                     playingTitle = null
+                    currentSongUri = null
                     isPlaying = false
                     snackbarHostState.showSnackbar("接続が切断されました")
+                    
+                    // MusicServiceを停止
+                    val stopIntent = Intent(context, MusicService::class.java).apply {
+                        action = MusicService.ACTION_STOP
+                    }
+                    context.stopService(stopIntent)
+                    
                     delay(500)
                     onCancel()
                 }
@@ -590,7 +621,7 @@ class MainActivity : ComponentActivity() {
             while (isConnected) {
                 val service = MusicService.instance
                 if (service != null) {
-                    isPlaying = service.isPlaying() // サーバー側もサービスの状態を常に同期
+                    isPlaying = service.isPlaying()
                     if (service.getDuration() > 0) {
                         currentPosition = service.getCurrentPosition()
                         duration = service.getDuration()
@@ -620,13 +651,14 @@ class MainActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(16.dp))
                 playingTitle?.let {
                     Text("再生中: $it")
-                    Button(onClick = {
+                    Button(
+                        enabled = currentSongUri != null,
+                        onClick = {
                         if (isPlaying) {
                             server.pauseMusic()
                         } else {
                             server.resumeMusic()
                         }
-                        // UI状態はLaunchedEffect内のループでサービスから同期されるのでここでは更新しない
                     }) { Text(if (isPlaying) "⏸" else "▶") }
                 }
                 if (duration > 0) {
@@ -645,7 +677,15 @@ class MainActivity : ComponentActivity() {
                         Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
                     }
                 }
-                Button(onClick = { server.stopServer(); onCancel() }) { Text("切断") }
+                Button(onClick = { 
+                    server.stopServer()
+                    // MusicServiceを明示的に停止
+                    val stopIntent = Intent(context, MusicService::class.java).apply {
+                        action = MusicService.ACTION_STOP
+                    }
+                    context.stopService(stopIntent)
+                    onCancel() 
+                }) { Text("切断") }
             }
         }
     }
@@ -662,31 +702,61 @@ class MainActivity : ComponentActivity() {
             val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
             val collection = MediaStore.Audio.Media.getContentUri(volume)
             val storageType = if (volume == "external_primary" || volume == "external") "内部" else "SD"
-            val projection = arrayOf(
-                MediaStore.Audio.Media._ID,
-                MediaStore.Audio.Media.TITLE,
-                MediaStore.Audio.Media.DATA,
-                MediaStore.Audio.Media.RELATIVE_PATH
-            )
+            
+            // APIレベルに応じたプロジェクションの設定
+            val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                arrayOf(
+                    MediaStore.Audio.Media._ID,
+                    MediaStore.Audio.Media.TITLE,
+                    MediaStore.Audio.Media.DISPLAY_NAME,
+                    MediaStore.Audio.Media.RELATIVE_PATH
+                )
+            } else {
+                arrayOf(
+                    MediaStore.Audio.Media._ID,
+                    MediaStore.Audio.Media.TITLE,
+                    MediaStore.Audio.Media.DATA
+                )
+            }
+            
             val cursor = context.contentResolver.query(collection, projection, selection, null, null)
             cursor?.use {
                 val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val pathColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
-                } else it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
 
                 while (it.moveToNext()) {
                     val id = it.getLong(idColumn)
                     val title = it.getString(titleColumn)
-                    val path = it.getString(pathColumn) ?: ""
-                    val relativePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        it.getString(pathColumn) ?: "Unknown"
-                    } else path.substringBeforeLast("/", "Unknown")
+                    
+                    val fileName: String
+                    val folderPath: String
+                    val relativePathForGrouping: String
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        fileName = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)) ?: ""
+                        folderPath = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)) ?: ""
+                        relativePathForGrouping = folderPath
+                    } else {
+                        val fullPath = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)) ?: ""
+                        fileName = fullPath.substringAfterLast("/")
+                        val dir = fullPath.substringBeforeLast("/", "")
+                        folderPath = if (dir.isNotEmpty()) "$dir/" else ""
+                        relativePathForGrouping = dir
+                    }
+
+                    // 要望の形式: フォルダ/ファイル名/曲名
+                    val displayPath = "${folderPath}${fileName}/${title}"
 
                     val contentUri = Uri.withAppendedPath(collection, id.toString())
-                    val folder = relativePath.removeSuffix("/").substringAfterLast("/")
-                    list.add(MusicItem(title = title, uri = contentUri, folder = folder, path = path, storage = storageType))
+                    val folder = relativePathForGrouping.removeSuffix("/").substringAfterLast("/", "Unknown")
+                    
+                    list.add(MusicItem(
+                        title = title, 
+                        uri = contentUri, 
+                        folder = folder.ifEmpty { "Root" }, 
+                        path = displayPath, 
+                        storage = storageType
+                    ))
                 }
             }
         }
