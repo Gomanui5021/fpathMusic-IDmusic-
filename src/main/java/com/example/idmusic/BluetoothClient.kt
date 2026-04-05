@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
+import android.net.Uri
 import kotlinx.coroutines.*
 import java.util.UUID
 import java.io.BufferedReader
@@ -118,8 +119,15 @@ class BluetoothClient(private val context: Context) {
             line.startsWith("NAME:") -> onClientNameReceived?.invoke(line.removePrefix("NAME:"))
             line.startsWith("ITEM:") -> {
                 val parts = line.removePrefix("ITEM:").split("||")
-                if (parts.size >= 5) {
-                    tempList.add(MusicItem(parts[1], android.net.Uri.parse(parts[2]), parts[0], parts[3], parts[4]))
+                if (parts.size >= 6) {
+                    tempList.add(MusicItem(
+                        title = parts[1],
+                        uri = Uri.parse(parts[2]),
+                        folder = parts[0],
+                        path = parts[3],
+                        storage = parts[4],
+                        albumId = parts[5].toLongOrNull() ?: 0L
+                    ))
                 }
             }
             line.startsWith("PROGRESS:") -> {
@@ -133,7 +141,6 @@ class BluetoothClient(private val context: Context) {
                 tempList.clear()
                 CoroutineScope(Dispatchers.Main).launch { onReceiveMusicList?.invoke(result) }
             }
-            // STATE: PLAY: NEXT: PREVIOUS: 等、クライアントのUI更新が必要なメッセージをすべて渡す
             else -> onReceiveMessage?.invoke(line)
         }
     }

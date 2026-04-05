@@ -72,7 +72,8 @@ class BluetoothServer(private val context: Context) : Thread() {
             try {
                 musicList.forEach {
                     if (!isRunning) return@execute
-                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}"
+                    // albumIdも送信内容に追加
+                    val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}||${it.albumId}"
                     synchronized(this) {
                         writer?.write(msg + "\n")
                     }
