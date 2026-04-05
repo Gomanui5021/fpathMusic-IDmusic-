@@ -40,6 +40,8 @@ class BluetoothServer(private val context: Context) : Thread() {
 
     var onConnected: (() -> Unit)? = null
     var onPlay: ((String) -> Unit)? = null
+    var onNext: (() -> Unit)? = null
+    var onPrevious: (() -> Unit)? = null
     var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
 
@@ -100,7 +102,6 @@ class BluetoothServer(private val context: Context) : Thread() {
                 reader = BufferedReader(InputStreamReader(socket?.inputStream, Charsets.UTF_8))
             }
             
-            // acceptした後はサーバーソケットは不要
             try { serverSocket?.close() } catch(_: Exception) {}
             serverSocket = null
 
@@ -163,6 +164,12 @@ class BluetoothServer(private val context: Context) : Thread() {
                 context.startService(intent)
                 onPlay?.invoke("RESUME")
             }
+            message == "NEXT" -> {
+                onNext?.invoke()
+            }
+            message == "PREVIOUS" -> {
+                onPrevious?.invoke()
+            }
             message.startsWith("SEEK:") -> {
                 val pos = message.removePrefix("SEEK:").toIntOrNull() ?: 0
                 val intent = Intent(context, MusicService::class.java).apply {
@@ -196,7 +203,6 @@ class BluetoothServer(private val context: Context) : Thread() {
         isRunning = false
         instance = null
         
-        // メメインスレッドをブロックしないよう、リソースのクローズもスレッドで行う
         thread {
             synchronized(this) {
                 try {

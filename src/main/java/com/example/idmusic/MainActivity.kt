@@ -227,6 +227,44 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        fun playSong(song: MusicItem) {
+            bluetoothClient.sendPlay(song.uri.toString())
+            currentSongTitle = song.title
+            currentSongUri = song.uri.toString()
+            isPlaying = true
+            duration = 0
+            currentPosition = 0
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            val intent = Intent(context, MusicService::class.java).apply {
+                action = MusicService.ACTION_UPDATE_STATE
+                putExtra("IS_PLAYING", true)
+                putExtra("TITLE", song.title)
+                putExtra("DEVICE", connectedDeviceName)
+                putExtra("DURATION", 0)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun skipNext() {
+            val currentIndex = musicItems.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (currentIndex != -1 && currentIndex < musicItems.size - 1) {
+                playSong(musicItems[currentIndex + 1])
+            }
+        }
+
+        fun skipPrevious() {
+            val currentIndex = musicItems.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (currentIndex > 0) {
+                playSong(musicItems[currentIndex - 1])
+            }
+        }
+
         LaunchedEffect(Unit) {
 
             bluetoothClient.onConnected = {
@@ -255,19 +293,43 @@ class MainActivity : ComponentActivity() {
             }
 
             bluetoothClient.onReceiveMessage = { message ->
-                if (message.startsWith("STATE:")) {
-                    val playing = message.removePrefix("STATE:") == "PLAYING"
-                    isPlaying = playing
+                scope.launch {
+                    when {
+                        message.startsWith("STATE:") -> {
+                            val playing = message.removePrefix("STATE:") == "PLAYING"
+                            isPlaying = playing
 
-                    val intent = Intent(context, MusicService::class.java).apply {
-                        action = MusicService.ACTION_UPDATE_STATE
-                        putExtra("IS_PLAYING", playing)
-                        putExtra("POSITION", currentPosition)
-                        putExtra("DURATION", duration)
-                        putExtra("TITLE", currentSongTitle)
-                        putExtra("DEVICE", connectedDeviceName)
+                            val intent = Intent(context, MusicService::class.java).apply {
+                                action = MusicService.ACTION_UPDATE_STATE
+                                putExtra("IS_PLAYING", playing)
+                                putExtra("POSITION", currentPosition)
+                                putExtra("DURATION", duration)
+                                putExtra("TITLE", currentSongTitle)
+                                putExtra("DEVICE", connectedDeviceName)
+                            }
+                            ContextCompat.startForegroundService(context, intent)
+                        }
+                        message.startsWith("PLAY:") -> {
+                            val uri = message.removePrefix("PLAY:")
+                            val song = musicItems.find { it.uri.toString() == uri }
+                            if (song != null) {
+                                currentSongTitle = song.title
+                                currentSongUri = song.uri.toString()
+                                isPlaying = true
+                                duration = 0
+                                currentPosition = 0
+
+                                val intent = Intent(context, MusicService::class.java).apply {
+                                    action = MusicService.ACTION_UPDATE_STATE
+                                    putExtra("IS_PLAYING", true)
+                                    putExtra("TITLE", song.title)
+                                    putExtra("DEVICE", connectedDeviceName)
+                                    putExtra("DURATION", 0)
+                                }
+                                ContextCompat.startForegroundService(context, intent)
+                            }
+                        }
                     }
-                    ContextCompat.startForegroundService(context, intent)
                 }
             }
 
@@ -403,27 +465,7 @@ class MainActivity : ComponentActivity() {
                                             .fillMaxWidth()
                                             .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
                                             .clickable {
-                                                bluetoothClient.sendPlay(song.uri.toString())
-                                                currentSongTitle = song.title
-                                                currentSongUri = song.uri.toString()
-                                                isPlaying = true
-                                                duration = 0 // 新しい曲なので一旦リセット
-                                                currentPosition = 0
-
-                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                                                ) {
-                                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                                }
-
-                                                val intent = Intent(context, MusicService::class.java).apply {
-                                                    action = MusicService.ACTION_UPDATE_STATE
-                                                    putExtra("IS_PLAYING", true)
-                                                    putExtra("TITLE", song.title)
-                                                    putExtra("DEVICE", connectedDeviceName)
-                                                    putExtra("DURATION", 0)
-                                                }
-                                                ContextCompat.startForegroundService(context, intent)
+                                                playSong(song)
                                             }
                                             .padding(12.dp)
                                     ) {
@@ -451,7 +493,7 @@ class MainActivity : ComponentActivity() {
                             .padding(8.dp),
                         elevation = CardDefaults.cardElevation(8.dp)
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(8.dp)) {
                             if (currentSongTitle != null) {
                                 Text(
                                     text = "♪: $currentSongTitle",
@@ -463,9 +505,14 @@ class MainActivity : ComponentActivity() {
                             Text("接続デバイス: $connectedDeviceName")
 
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp).navigationBarsPadding(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
+                                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                IconButton(onClick = { skipPrevious() }) {
+                                    Text("⏮", fontSize = 24.sp)
+                                }
+                                Spacer(modifier = Modifier.width(16.dp))
                                 Button(
                                     onClick = {
                                         if (isPlaying) {
@@ -484,32 +531,36 @@ class MainActivity : ComponentActivity() {
                                         }
                                         ContextCompat.startForegroundService(context, intent)
                                     }
-                                ) { Text(if (isPlaying) "⏸" else "▶") }
-
-                                Button(onClick = {
-                                    bluetoothClient.sendDisconnect()
-                                    // isConnected = false // これは bluetoothClient.onDisconnected で行う
-                                }) { Text("切断") }
+                                ) { Text(if (isPlaying) "⏸" else "▶", fontSize = 20.sp) }
+                                Spacer(modifier = Modifier.width(16.dp))
+                                IconButton(onClick = { skipNext() }) {
+                                    Text("⏭", fontSize = 24.sp)
+                                }
                             }
-                        }
 
-                        Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                            // durationが0 poolでもスライダーを表示するか、あるいはdurationが届くのを待つ
                             val sliderValue = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f
-                            
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
                             ) {
-                                Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
+                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp)
                                 Slider(
                                     value = sliderValue,
                                     onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
                                     onValueChangeFinished = { if (duration > 0) bluetoothClient.sendSeek(currentPosition) },
-                                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                    modifier = Modifier.weight(1f),
                                     enabled = duration > 0
                                 )
-                                Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
+                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp)
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = {
+                                    bluetoothClient.sendDisconnect()
+                                }) { Text("切断") }
                             }
                         }
                     }
@@ -532,7 +583,6 @@ class MainActivity : ComponentActivity() {
         var currentPosition by remember { mutableStateOf(0) }
         var duration by remember { mutableStateOf(0) }
         val snackbarHostState = remember { SnackbarHostState() }
-        val scope = rememberCoroutineScope()
         val musicList = remember { getMusicList(context) }
 
         fun getAlbumArt(context: Context, musicUri: Uri): Uri? {
@@ -559,6 +609,43 @@ class MainActivity : ComponentActivity() {
             return "%02d:%02d".format(min, sec)
         }
 
+        fun playSong(uri: String) {
+            val found = musicList.find { it.uri.toString() == uri }
+            if (found != null) {
+                val intent = Intent(context, MusicService::class.java).apply {
+                    action = MusicService.ACTION_PLAY
+                    putExtra("MUSIC_URI", found.uri.toString())
+                    putExtra("TITLE", found.title)
+                    putExtra("DEVICE", "Client")
+                }
+                ContextCompat.startForegroundService(context, intent)
+                currentSongUri = found.uri.toString()
+                albumArtUri = getAlbumArt(context, found.uri)
+                playingTitle = found.title
+                isPlaying = true
+            }
+        }
+
+        fun skipNext() {
+            val currentIndex = musicList.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (currentIndex != -1 && currentIndex < musicList.size - 1) {
+                val nextSong = musicList[currentIndex + 1]
+                playSong(nextSong.uri.toString())
+                server.sendMessage("PLAY:${nextSong.uri}")
+                server.sendMessage("STATE:PLAYING")
+            }
+        }
+
+        fun skipPrevious() {
+            val currentIndex = musicList.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (currentIndex > 0) {
+                val prevSong = musicList[currentIndex - 1]
+                playSong(prevSong.uri.toString())
+                server.sendMessage("PLAY:${prevSong.uri}")
+                server.sendMessage("STATE:PLAYING")
+            }
+        }
+
         DisposableEffect(Unit) {
             onDispose {
                 server.stopServer()
@@ -580,22 +667,11 @@ class MainActivity : ComponentActivity() {
                         isPlaying = true
                         return@launch
                     }
-                    val found = musicList.find { it.uri.toString() == value }
-                    if (found != null) {
-                        val intent = Intent(context, MusicService::class.java).apply {
-                            action = MusicService.ACTION_PLAY
-                            putExtra("MUSIC_URI", found.uri.toString())
-                            putExtra("TITLE", found.title)
-                            putExtra("DEVICE", "Client")
-                        }
-                        ContextCompat.startForegroundService(context, intent)
-                        currentSongUri = found.uri.toString()
-                        albumArtUri = getAlbumArt(context, found.uri)
-                        playingTitle = found.title
-                        isPlaying = true
-                    }
+                    playSong(value)
                 }
             }
+            server.onNext = { CoroutineScope(Dispatchers.Main).launch { skipNext() } }
+            server.onPrevious = { CoroutineScope(Dispatchers.Main).launch { skipPrevious() } }
             server.onDisconnected = {
                 CoroutineScope(Dispatchers.Main).launch {
                     isConnected = false
@@ -605,7 +681,6 @@ class MainActivity : ComponentActivity() {
                     isPlaying = false
                     snackbarHostState.showSnackbar("接続が切断されました")
                     
-                    // MusicServiceを停止
                     val stopIntent = Intent(context, MusicService::class.java).apply {
                         action = MusicService.ACTION_STOP
                     }
@@ -650,42 +725,62 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 playingTitle?.let {
-                    Text("再生中: $it")
-                    Button(
-                        enabled = currentSongUri != null,
-                        onClick = {
-                        if (isPlaying) {
-                            server.pauseMusic()
-                        } else {
-                            server.resumeMusic()
+                    Text("再生中: $it", style = MaterialTheme.typography.titleMedium)
+                    
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        IconButton(onClick = { skipPrevious() }) {
+                            Text("⏮", fontSize = 28.sp)
                         }
-                    }) { Text(if (isPlaying) "⏸" else "▶") }
+                        Spacer(modifier = Modifier.width(24.dp))
+                        Button(
+                            onClick = {
+                                if (isPlaying) {
+                                    server.pauseMusic()
+                                } else {
+                                    server.resumeMusic()
+                                }
+                            }
+                        ) { Text(if (isPlaying) "⏸" else "▶", fontSize = 22.sp) }
+                        Spacer(modifier = Modifier.width(24.dp))
+                        IconButton(onClick = { skipNext() }) {
+                            Text("⏭", fontSize = 28.sp)
+                        }
+                    }
                 }
+                
                 if (duration > 0) {
                     val sliderValue = currentPosition.toFloat() / duration.toFloat()
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
                     ) {
-                        Text(text = formatTime(currentPosition), modifier = Modifier.width(50.dp))
+                        Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp)
                         Slider(
                             value = sliderValue,
                             onValueChange = { currentPosition = (it * duration).toInt() },
                             onValueChangeFinished = { server.seekTo(currentPosition) },
-                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                            modifier = Modifier.weight(1f)
                         )
-                        Text(text = formatTime(duration), modifier = Modifier.width(50.dp))
+                        Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp)
                     }
                 }
-                Button(onClick = { 
-                    server.stopServer()
-                    // MusicServiceを明示的に停止
-                    val stopIntent = Intent(context, MusicService::class.java).apply {
-                        action = MusicService.ACTION_STOP
-                    }
-                    context.stopService(stopIntent)
-                    onCancel() 
-                }) { Text("切断") }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
+                    Button(onClick = { 
+                        server.stopServer()
+                        val stopIntent = Intent(context, MusicService::class.java).apply {
+                            action = MusicService.ACTION_STOP
+                        }
+                        context.stopService(stopIntent)
+                        onCancel() 
+                    }) { Text("切断") }
+                }
             }
         }
     }
@@ -760,6 +855,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        return list
+        return list.sortedWith(compareBy({ it.folder }, { it.title }))
     }
 }

@@ -32,6 +32,8 @@ class MusicService : Service() {
         const val ACTION_RESUME = "ACTION_RESUME"
         const val ACTION_STOP = "STOP"
         const val ACTION_SEEK = "ACTION_SEEK"
+        const val ACTION_NEXT = "ACTION_NEXT"
+        const val ACTION_PREVIOUS = "ACTION_PREVIOUS"
         
         const val ACTION_REMOTE_PAUSE = "ACTION_REMOTE_PAUSE"
         const val ACTION_REMOTE_RESUME = "ACTION_REMOTE_RESUME"
@@ -50,11 +52,14 @@ class MusicService : Service() {
 
     private var mediaSession: MediaSessionCompat? = null
 
-    // Xiaomi対策のキャッシュ
+    // メタデータ更新用のキャッシュ
     private var lastMetadataTitle: String? = null
     private var lastMetadataDuration: Long = -1L
-    private var lastIsPlayingNotification: Boolean? = null
-    private var lastNotificationDevice: String? = null
+
+    // 通知更新用の独立したキャッシュ（レートリミット対策）
+    private var lastNotifiedTitle: String? = null
+    private var lastNotifiedIsPlaying: Boolean? = null
+    private var lastNotifiedDevice: String? = null
     
     private var lastPlaybackState: Int = -1
     private var lastPlaybackPosition: Long = -1L
@@ -65,14 +70,10 @@ class MusicService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         
-        // データの事前取得
         val newTitle = intent?.getStringExtra("TITLE")
         val newDevice = intent?.getStringExtra("DEVICE")
         if (newTitle != null) currentTitle = newTitle
         if (newDevice != null) currentDevice = newDevice
-
-        // フォアグラウンド維持
-        updateNotification(isPlayingLocal)
 
         when (action) {
             ACTION_PLAY -> {
@@ -90,6 +91,12 @@ class MusicService : Service() {
                 resumeLocal()
                 sendControlCommand("RESUME")
                 sendControlCommand("STATE:PLAYING")
+            }
+            ACTION_NEXT -> {
+                sendControlCommand("NEXT")
+            }
+            ACTION_PREVIOUS -> {
+                sendControlCommand("PREVIOUS")
             }
             ACTION_REMOTE_PAUSE -> {
                 pauseLocal()
@@ -152,9 +159,7 @@ class MusicService : Service() {
                         
                         setOnCompletionListener {
                             Handler(Looper.getMainLooper()).postDelayed({
-                                pauseLocal()
-                                sendControlCommand("PAUSE")
-                                sendControlCommand("STATE:PAUSED")
+                                sendControlCommand("NEXT")
                             }, 1000)
                         }
 
@@ -205,7 +210,9 @@ class MusicService : Service() {
                 PlaybackStateCompat.ACTION_PAUSE or 
                 PlaybackStateCompat.ACTION_PLAY_PAUSE or 
                 PlaybackStateCompat.ACTION_STOP or 
-                PlaybackStateCompat.ACTION_SEEK_TO
+                PlaybackStateCompat.ACTION_SEEK_TO or
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
             )
             .setState(newState, position, if (isPlaying) 1f else 0f)
             .build()
@@ -228,8 +235,16 @@ class MusicService : Service() {
     }
 
     private fun updateNotification(isPlaying: Boolean) {
-        lastIsPlayingNotification = isPlaying
-        lastNotificationDevice = currentDevice
+        // 通知専用のキャッシュ変数で比較。変化がない場合はスキップ。
+        if (currentTitle == lastNotifiedTitle && 
+            isPlaying == lastNotifiedIsPlaying && 
+            currentDevice == lastNotifiedDevice) {
+            return
+        }
+
+        lastNotifiedIsPlaying = isPlaying
+        lastNotifiedDevice = currentDevice
+        lastNotifiedTitle = currentTitle
 
         val notification = createNotification(currentTitle ?: "不明", currentDevice ?: "接続中", isPlaying, currentBitmap)
         try {
@@ -251,8 +266,12 @@ class MusicService : Service() {
             .setContentText(device)
             .setSmallIcon(R.drawable.small_logo)
             .setLargeIcon(bitmap ?: BitmapFactory.decodeResource(resources, R.drawable.no_image))
+            .addAction(createPreviousAction())
             .addAction(createPlayPauseAction(isPlaying))
-            .setStyle(MediaStyle().setMediaSession(mediaSession?.sessionToken).setShowActionsInCompactView(0))
+            .addAction(createNextAction())
+            .setStyle(MediaStyle()
+                .setMediaSession(mediaSession?.sessionToken)
+                .setShowActionsInCompactView(0, 1, 2))
             .setOngoing(isPlaying)
             .build()
 
@@ -260,12 +279,24 @@ class MusicService : Service() {
         val actionIntent = Intent(this, MusicService::class.java).apply {
             action = if (isPlaying) ACTION_PAUSE else ACTION_RESUME
         }
-        val pendingIntent = PendingIntent.getService(this, 0, actionIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val pendingIntent = PendingIntent.getService(this, 1, actionIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Action(
             if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
             if (isPlaying) "一時停止" else "再生",
             pendingIntent
         )
+    }
+
+    private fun createNextAction(): NotificationCompat.Action {
+        val actionIntent = Intent(this, MusicService::class.java).apply { action = ACTION_NEXT }
+        val pendingIntent = PendingIntent.getService(this, 2, actionIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Action(android.R.drawable.ic_media_next, "次へ", pendingIntent)
+    }
+
+    private fun createPreviousAction(): NotificationCompat.Action {
+        val actionIntent = Intent(this, MusicService::class.java).apply { action = ACTION_PREVIOUS }
+        val pendingIntent = PendingIntent.getService(this, 3, actionIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Action(android.R.drawable.ic_media_previous, "前へ", pendingIntent)
     }
 
     fun isPlaying(): Boolean = isPlayingLocal
@@ -308,6 +339,14 @@ class MusicService : Service() {
                     val intent = Intent(this@MusicService, MusicService::class.java).apply { action = ACTION_PAUSE }
                     startService(intent)
                 }
+                override fun onSkipToNext() {
+                    val intent = Intent(this@MusicService, MusicService::class.java).apply { action = ACTION_NEXT }
+                    startService(intent)
+                }
+                override fun onSkipToPrevious() {
+                    val intent = Intent(this@MusicService, MusicService::class.java).apply { action = ACTION_PREVIOUS }
+                    startService(intent)
+                }
                 override fun onStop() {
                     val intent = Intent(this@MusicService, MusicService::class.java).apply { action = ACTION_STOP }
                     startService(intent)
@@ -323,7 +362,6 @@ class MusicService : Service() {
             isActive = true
         }
         instance = this
-        // 初期状態をセットしてMediaSessionを有効化
         updatePlaybackState(false, 0)
     }
 

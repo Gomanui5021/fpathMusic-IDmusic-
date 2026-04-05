@@ -78,6 +78,8 @@ class BluetoothClient(private val context: Context) {
     fun sendPlay(uri: String) { sendMessage("PLAY:$uri") }
     fun sendPause() { sendMessage("PAUSE") }
     fun sendResume() { sendMessage("RESUME") }
+    fun sendNext() { sendMessage("NEXT") }
+    fun sendPrevious() { sendMessage("PREVIOUS") }
     
     fun sendDisconnect() { 
         Thread {
@@ -131,7 +133,8 @@ class BluetoothClient(private val context: Context) {
                 tempList.clear()
                 CoroutineScope(Dispatchers.Main).launch { onReceiveMusicList?.invoke(result) }
             }
-            line.startsWith("STATE:") -> onReceiveMessage?.invoke(line)
+            // STATE: PLAY: NEXT: PREVIOUS: 等、クライアントのUI更新が必要なメッセージをすべて渡す
+            else -> onReceiveMessage?.invoke(line)
         }
     }
 
