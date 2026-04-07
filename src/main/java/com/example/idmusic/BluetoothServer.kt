@@ -42,6 +42,7 @@ class BluetoothServer(private val context: Context) : Thread() {
     var onPlay: ((String) -> Unit)? = null
     var onNext: (() -> Unit)? = null
     var onPrevious: (() -> Unit)? = null
+    var onAutoSkipSync: ((Boolean) -> Unit)? = null // 設定同期用
     var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
 
@@ -72,7 +73,6 @@ class BluetoothServer(private val context: Context) : Thread() {
             try {
                 musicList.forEach {
                     if (!isRunning) return@execute
-                    // albumIdも送信内容に追加
                     val msg = "ITEM:${it.folder}||${it.title}||${it.uri}||${it.path}||${it.storage}||${it.albumId}"
                     synchronized(this) {
                         writer?.write(msg + "\n")
@@ -129,7 +129,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                     if (line.isNotEmpty()) handleMessage(line)
                 }
             } catch (e: Exception) {
-                if (isRunning) Log.e("BT", "Listen Error", e)
+                Log.e("BT", "Listen Error", e)
             } finally {
                 onDisconnected?.invoke()
                 stopServer()
@@ -165,11 +165,11 @@ class BluetoothServer(private val context: Context) : Thread() {
                 context.startService(intent)
                 onPlay?.invoke("RESUME")
             }
-            message == "NEXT" -> {
-                onNext?.invoke()
-            }
-            message == "PREVIOUS" -> {
-                onPrevious?.invoke()
+            message == "NEXT" -> onNext?.invoke()
+            message == "PREVIOUS" -> onPrevious?.invoke()
+            message.startsWith("SET_STOP_EACH:") -> {
+                val enabled = message.removePrefix("SET_STOP_EACH:") == "ON"
+                onAutoSkipSync?.invoke(enabled)
             }
             message.startsWith("SEEK:") -> {
                 val pos = message.removePrefix("SEEK:").toIntOrNull() ?: 0
@@ -179,9 +179,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
                 context.startService(intent)
             }
-            message == "DISCONNECT" -> {
-                stopServer()
-            }
+            message == "DISCONNECT" -> stopServer()
         }
     }
 

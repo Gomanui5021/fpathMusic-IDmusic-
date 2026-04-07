@@ -46,6 +46,9 @@ class MusicService : Service() {
 
         const val CHANNEL_ID = "music_channel"
         var instance: MusicService? = null
+        
+        // UI側に曲終了を通知するためのコールバック
+        var onTrackEnded: (() -> Unit)? = null
     }
 
     private var mediaPlayer: MediaPlayer? = null
@@ -147,8 +150,8 @@ class MusicService : Service() {
                 updateNotification(isPlayingLocal)
             }
             ACTION_STOP -> {
-                pauseLocal()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(true)
+                stopPlayer()
                 stopSelf()
             }
         }
@@ -188,23 +191,32 @@ class MusicService : Service() {
         }
     }
 
-    private fun pauseLocal() {
+    fun pauseLocal() {
         isPlayingLocal = false
         try { mediaPlayer?.pause() } catch (_: Exception) {}
         updatePlaybackState(false, getCurrentPosition().toLong())
         updateNotification(false)
     }
 
-    private fun resumeLocal() {
+    fun resumeLocal() {
         isPlayingLocal = true
         try { mediaPlayer?.start() } catch (_: Exception) {}
         updatePlaybackState(true, getCurrentPosition().toLong())
         updateNotification(true)
     }
 
+    private fun stopPlayer() {
+        isPlayingLocal = false
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+        } catch (_: Exception) {}
+    }
+
     private fun handlePlay(uriString: String?) {
         try {
-            mediaPlayer?.release()
+            stopPlayer()
             uriString?.let {
                 val uri = Uri.parse(it)
                 contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
@@ -214,11 +226,13 @@ class MusicService : Service() {
                         currentDuration = duration.toLong()
                         setOnCompletionListener {
                             Handler(Looper.getMainLooper()).postDelayed({ 
-                                // 曲が終わったら一旦停止状態にしてから次へ送る
                                 isPlayingLocal = false
                                 updatePlaybackState(false, currentDuration)
                                 updateNotification(false)
-                                sendControlCommand("NEXT") 
+                                // クライアント側に停止を同期
+                                sendControlCommand("STATE:PAUSED")
+                                // UI側（ServerScreenなど）に曲終了を通知
+                                onTrackEnded?.invoke()
                             }, 500)
                         }
                         start()
@@ -298,7 +312,8 @@ class MusicService : Service() {
 
         val notification = createNotification(currentTitle ?: "不明", currentDevice ?: "接続中", isPlaying, currentBitmap)
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // startForeground for API 33+
                 startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
             } else {
                 startForeground(1, notification)
@@ -373,7 +388,7 @@ class MusicService : Service() {
     }
 
     override fun onDestroy() {
-        try { mediaPlayer?.release() } catch (_: Exception) {}
+        stopPlayer()
         mediaSession?.isActive = false
         mediaSession?.release()
         instance = null

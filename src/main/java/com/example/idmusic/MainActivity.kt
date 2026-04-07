@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
 import java.io.File
 import android.content.ContentUris
+import androidx.compose.ui.draw.scale
 
 class MainActivity : ComponentActivity() {
 
@@ -229,18 +230,13 @@ class MainActivity : ComponentActivity() {
         var connectingDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
 
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
+        var isStopEachTrackEnabled by remember { mutableStateOf(false) }
 
         val view = LocalView.current
         SideEffect {
             val window = (view.context as android.app.Activity).window
             window.statusBarColor = android.graphics.Color.WHITE
             WindowCompat.getInsetsController(window, view)?.isAppearanceLightStatusBars = true
-        }
-
-        DisposableEffect(Unit) {
-            onDispose {
-                bluetoothClient.disconnect()
-            }
         }
 
         fun playSong(song: MusicItem) {
@@ -282,6 +278,21 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        LaunchedEffect(isStopEachTrackEnabled) {
+            MusicService.onTrackEnded = {
+                if (!isStopEachTrackEnabled) {
+                    scope.launch { skipNext() }
+                }
+            }
+        }
+
+        DisposableEffect(Unit) {
+            onDispose {
+                bluetoothClient.disconnect()
+                MusicService.onTrackEnded = null
+            }
+        }
+
         LaunchedEffect(Unit) {
 
             bluetoothClient.onConnected = {
@@ -294,7 +305,6 @@ class MainActivity : ComponentActivity() {
 
 
             bluetoothClient.onDisconnected = {
-                // 即座に停止と遷移を行う
                 isConnected = false
                 val intent = Intent(context, MusicService::class.java)
                 context.stopService(intent)
@@ -346,6 +356,9 @@ class MainActivity : ComponentActivity() {
                                 }
                                 context.startService(intent)
                             }
+                        }
+                        message.startsWith("SET_STOP_EACH:") -> {
+                            isStopEachTrackEnabled = message.removePrefix("SET_STOP_EACH:") == "ON"
                         }
                         message == "NEXT" -> skipNext()
                         message == "PREVIOUS" -> skipPrevious()
@@ -465,7 +478,15 @@ class MainActivity : ComponentActivity() {
                                     .padding(horizontal = 8.dp),
                                 contentAlignment = Alignment.CenterStart
                             ) {
-                                Text(text = if (isExpanded) "📂 $folder" else "📁 $folder")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(text = folder)
+                                }
                             }
                         }
                         if (isExpanded) {
@@ -478,10 +499,21 @@ class MainActivity : ComponentActivity() {
                                         .clickable { playSong(song) }
                                         .padding(12.dp)
                                 ) {
-                                    Text(
-                                        text = if (isCurrent) "▶ ${song.title}" else song.title,
-                                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (isCurrent) {
+                                            Icon(
+                                                painter = painterResource(android.R.drawable.ic_media_play),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                        }
+                                        Text(
+                                            text = song.title,
+                                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                        )
+                                    }
                                     Text(
                                         text = "[${song.storage}] ${song.path}",
                                         fontSize = 12.sp,
@@ -509,7 +541,7 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
-                            )
+                                )
                         }
                         Text("接続デバイス: $connectedDeviceName")
 
@@ -519,7 +551,7 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(onClick = { skipPrevious() }) {
-                                Text("⏮", fontSize = 24.sp)
+                                Icon(painterResource(android.R.drawable.ic_media_previous), contentDescription = "Skip Previous")
                             }
                             Spacer(modifier = Modifier.width(16.dp))
                             Button(
@@ -540,10 +572,15 @@ class MainActivity : ComponentActivity() {
                                     }
                                     context.startService(intent)
                                 }
-                            ) { Text(if (isPlaying) "⏸" else "▶", fontSize = 20.sp) }
+                            ) {
+                                Icon(
+                                    painter = painterResource(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play),
+                                    contentDescription = "Play/Pause"
+                                )
+                            }
                             Spacer(modifier = Modifier.width(16.dp))
                             IconButton(onClick = { skipNext() }) {
-                                Text("⏭", fontSize = 24.sp)
+                                Icon(painterResource(android.R.drawable.ic_media_next), contentDescription = "Skip Next")
                             }
                         }
 
@@ -564,9 +601,21 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = isStopEachTrackEnabled,
+                                    onCheckedChange = { 
+                                        isStopEachTrackEnabled = it
+                                        bluetoothClient.sendStopEachTrack(it)
+                                    },
+                                    modifier = Modifier.scale(0.7f)
+                                )
+                                Text("一曲停止", fontSize = 12.sp)
+                            }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
                             }) { Text("切断") }
@@ -599,6 +648,7 @@ class MainActivity : ComponentActivity() {
         val musicList = remember { getMusicList(context) }
         var selectedTab by remember { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
+        var isStopEachTrackEnabled by remember { mutableStateOf(false) }
 
         fun getAlbumArtUri(albumId: Long): Uri {
             val artworkUri = Uri.parse("content://media/external/audio/albumart")
@@ -651,9 +701,18 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        LaunchedEffect(isStopEachTrackEnabled) {
+            MusicService.onTrackEnded = {
+                if (!isStopEachTrackEnabled) {
+                    scope.launch { skipNext() }
+                }
+            }
+        }
+
         DisposableEffect(Unit) {
             onDispose {
                 server?.stopServer()
+                MusicService.onTrackEnded = null
             }
         }
 
@@ -676,19 +735,17 @@ class MainActivity : ComponentActivity() {
                         playSong(value)
                     }
                 }
-                server.onNext = { CoroutineScope(Dispatchers.Main).launch { skipNext() } }
-                server.onPrevious = { CoroutineScope(Dispatchers.Main).launch { skipPrevious() } }
+                server.onNext = { scope.launch { skipNext() } }
+                server.onPrevious = { scope.launch { skipPrevious() } }
+                server.onAutoSkipSync = { enabled ->
+                    isStopEachTrackEnabled = enabled
+                }
                 server.onDisconnected = {
                     CoroutineScope(Dispatchers.Main).launch {
                         isConnected = false
-                        // 停止処理を最優先
                         val stopIntent = Intent(context, MusicService::class.java)
                         context.stopService(stopIntent)
-                        
-                        // 画面を戻す
                         onCancel()
-                        
-                        // スナックバー表示
                         snackbarHostState.showSnackbar("接続が切断されました")
                     }
                 }
@@ -769,27 +826,36 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(top = 8.dp)
                             ) {
                                 IconButton(onClick = { skipPrevious() }) {
-                                    Text("⏮", fontSize = 28.sp)
+                                    Icon(painterResource(android.R.drawable.ic_media_previous), contentDescription = "Skip Previous")
                                 }
                                 Spacer(modifier = Modifier.width(24.dp))
                                 Button(
                                     onClick = {
                                         if (isPlaying) {
-                                            if (isBluetoothEnabled) server?.pauseMusic() else {
-                                                val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_PAUSE }
-                                                context.startService(intent)
+                                            if (isBluetoothEnabled) {
+                                                server?.pauseMusic()
+                                            } else {
+                                                MusicService.instance?.pauseLocal()
                                             }
+                                            isPlaying = false
                                         } else {
-                                            if (isBluetoothEnabled) server?.resumeMusic() else {
-                                                val intent = Intent(context, MusicService::class.java).apply { action = MusicService.ACTION_RESUME }
-                                                context.startService(intent)
+                                            if (isBluetoothEnabled) {
+                                                server?.resumeMusic()
+                                            } else {
+                                                MusicService.instance?.resumeLocal()
                                             }
+                                            isPlaying = true
                                         }
                                     }
-                                ) { Text(if (isPlaying) "⏸" else "▶", fontSize = 22.sp) }
+                                ) { 
+                                    Icon(
+                                        painter = painterResource(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play),
+                                        contentDescription = "Play/Pause"
+                                    )
+                                }
                                 Spacer(modifier = Modifier.width(24.dp))
                                 IconButton(onClick = { skipNext() }) {
-                                    Text("⏭", fontSize = 28.sp)
+                                    Icon(painterResource(android.R.drawable.ic_media_next), contentDescription = "Skip Next")
                                 }
                             }
                         }
@@ -821,7 +887,22 @@ class MainActivity : ComponentActivity() {
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = isStopEachTrackEnabled,
+                                    onCheckedChange = { 
+                                        isStopEachTrackEnabled = it
+                                        server?.sendMessage("SET_STOP_EACH:${if(it) "ON" else "OFF"}")
+                                    },
+                                    modifier = Modifier.scale(0.7f)
+                                )
+                                Text("一曲停止", fontSize = 12.sp)
+                            }
                             Button(onClick = { 
                                 server?.stopServer()
                                 val stopIntent = Intent(context, MusicService::class.java)
@@ -847,7 +928,15 @@ class MainActivity : ComponentActivity() {
                                         .padding(horizontal = 8.dp),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
-                                    Text(text = if (isExpanded) "📂 $folder" else "📁 $folder")
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(text = folder)
+                                    }
                                 }
                             }
                             if (isExpanded) {
@@ -863,10 +952,21 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = if (isCurrent) "▶ ${song.title}" else song.title,
-                                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
-                                                )
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    if (isCurrent) {
+                                                        Icon(
+                                                            painter = painterResource(android.R.drawable.ic_media_play),
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(16.dp),
+                                                            tint = MaterialTheme.colorScheme.primary
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                    }
+                                                    Text(
+                                                        text = song.title,
+                                                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                                    )
+                                                }
                                                 Text(
                                                     text = "[${song.storage}] ${song.path}",
                                                     fontSize = 12.sp,

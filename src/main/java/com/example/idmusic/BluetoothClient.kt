@@ -81,6 +81,7 @@ class BluetoothClient(private val context: Context) {
     fun sendResume() { sendMessage("RESUME") }
     fun sendNext() { sendMessage("NEXT") }
     fun sendPrevious() { sendMessage("PREVIOUS") }
+    fun sendStopEachTrack(enabled: Boolean) { sendMessage("SET_STOP_EACH:${if (enabled) "ON" else "OFF"}") }
     
     fun sendDisconnect() { 
         Thread {
