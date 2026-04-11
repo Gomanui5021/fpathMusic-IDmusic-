@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -48,6 +49,82 @@ import androidx.compose.ui.draw.scale
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        fun getMusicListStatic(context: Context): List<MusicItem> {
+            val list = mutableListOf<MusicItem>()
+            val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.getExternalVolumeNames(context)
+            } else setOf("external")
+
+            for (volume in volumes) {
+                val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
+                val collection = MediaStore.Audio.Media.getContentUri(volume)
+                val storageType = if (volume == "external_primary" || volume == "external") "内部" else "SD"
+                
+                val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    arrayOf(
+                        MediaStore.Audio.Media._ID,
+                        MediaStore.Audio.Media.TITLE,
+                        MediaStore.Audio.Media.DISPLAY_NAME,
+                        MediaStore.Audio.Media.RELATIVE_PATH,
+                        MediaStore.Audio.Media.ALBUM_ID
+                    )
+                } else {
+                    arrayOf(
+                        MediaStore.Audio.Media._ID,
+                        MediaStore.Audio.Media.TITLE,
+                        MediaStore.Audio.Media.DATA,
+                        MediaStore.Audio.Media.ALBUM_ID
+                    )
+                }
+                
+                val cursor = context.contentResolver.query(collection, projection, selection, null, null)
+                cursor?.use {
+                    val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    val titleColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                    val albumIdColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+
+                    while (it.moveToNext()) {
+                        val id = it.getLong(idColumn)
+                        val title = it.getString(titleColumn)
+                        val albumId = it.getLong(albumIdColumn)
+                        
+                        val fileName: String
+                        val folderPath: String
+                        val relativePathForGrouping: String
+
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            fileName = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)) ?: ""
+                            folderPath = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)) ?: ""
+                            relativePathForGrouping = folderPath
+                        } else {
+                            val fullPath = it.getString(it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)) ?: ""
+                            fileName = fullPath.substringAfterLast("/")
+                            val dir = fullPath.substringBeforeLast("/", "")
+                            folderPath = if (dir.isNotEmpty()) "$dir/" else ""
+                            relativePathForGrouping = dir
+                        }
+
+                        val displayPath = "${folderPath}${fileName}/${title}"
+
+                        val contentUri = Uri.withAppendedPath(collection, id.toString())
+                        val folder = relativePathForGrouping.removeSuffix("/").substringAfterLast("/", "Unknown")
+                        
+                        list.add(MusicItem(
+                            title = title, 
+                            uri = contentUri, 
+                            folder = folder.ifEmpty { "Root" }, 
+                            path = displayPath, 
+                            storage = storageType,
+                            albumId = albumId
+                        ))
+                    }
+                }
+            }
+            return list.sortedWith(compareBy({ it.folder }, { it.title }))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -55,7 +132,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             var isPermissionGranted by remember { mutableStateOf(false) }
-            val snackbarHostState = remember { SnackbarHostState() }
             val scope = rememberCoroutineScope()
 
             // 通常権限（音楽 + Bluetooth）
@@ -131,15 +207,13 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 var role by remember { mutableStateOf<String?>(null) }
-                Scaffold(
-                    snackbarHost = { SnackbarHost(snackbarHostState) }
-                ) { padding ->
+                Scaffold { padding ->
                     Box(modifier = Modifier.padding(padding)) {
                         when (role) {
                             null -> RoleSelectScreen { role = it }
-                            "CLIENT" -> MusicScreen(notificationLauncher, snackbarHostState) { role = null }
-                            "SERVER" -> ServerScreen(isBluetoothEnabled = true, snackbarHostState, onStopCommunication = { role = "LOCAL" }) { role = null }
-                            "LOCAL" -> ServerScreen(isBluetoothEnabled = false, snackbarHostState, onConnectBluetooth = { role = "SERVER" }) { role = null }
+                            "CLIENT" -> MusicScreen(notificationLauncher) { role = null }
+                            "SERVER" -> ServerScreen(isBluetoothEnabled = true, onStopCommunication = { role = "LOCAL" }) { role = null }
+                            "LOCAL" -> ServerScreen(isBluetoothEnabled = false, onConnectBluetooth = { role = "SERVER" }) { role = null }
                         }
                     }
                 }
@@ -147,11 +221,45 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        notifyForegroundStatus(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        notifyForegroundStatus(false)
+    }
+
+    private fun notifyForegroundStatus(isForeground: Boolean) {
+        if (MusicService.instance != null) {
+            val intent = Intent(this, MusicService::class.java).apply {
+                action = MusicService.ACTION_SET_FOREGROUND
+                putExtra(MusicService.EXTRA_IS_FOREGROUND, isForeground)
+            }
+            startService(intent)
+        }
+    }
+
     // ---------------- Role Select ----------------
     @Composable
     fun RoleSelectScreen(onSelect: (String) -> Unit) {
-
+        val context = LocalContext.current
         val view = LocalView.current
+        
+        // バージョン名の取得
+        val versionName = remember {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+                } else {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                }
+            } catch (e: Exception) {
+                "Unknown"
+            }
+        }
+
         SideEffect {
             val window = (view.context as android.app.Activity).window
             window.statusBarColor = android.graphics.Color.WHITE
@@ -167,13 +275,21 @@ class MainActivity : ComponentActivity() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
-            Image(
-                painter = painterResource(id = R.drawable.app_logo),
-                contentDescription = "App Logo",
-                modifier = Modifier
-                    .size(500.dp)
-                    .padding(bottom = 32.dp)
-            )
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Image(
+                    painter = painterResource(id = R.drawable.app_logo),
+                    contentDescription = "App Logo",
+                    modifier = Modifier
+                        .size(500.dp)
+                        .padding(bottom = 32.dp)
+                )
+                Text(
+                    text = "Ver $versionName",
+                    modifier = Modifier.padding(bottom = 48.dp, end = 32.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.Gray
+                )
+            }
 
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -211,7 +327,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun MusicScreen(
         notificationLauncher: androidx.activity.compose.ManagedActivityResultLauncher<String, Boolean>,
-        snackbarHostState: SnackbarHostState,
         onDisconnect: () -> Unit
     ) {
         val context = LocalContext.current
@@ -231,6 +346,10 @@ class MainActivity : ComponentActivity() {
 
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
         var isStopEachTrackEnabled by remember { mutableStateOf(false) }
+        
+        // 音量同期用
+        var serverVolume by remember { mutableStateOf(0) }
+        var serverMaxVolume by remember { mutableStateOf(15) }
 
         val view = LocalView.current
         SideEffect {
@@ -299,7 +418,7 @@ class MainActivity : ComponentActivity() {
                 scope.launch {
                     isConnected = true
                     connectingDevice = null
-                    snackbarHostState.showSnackbar("接続成功")
+                    Toast.makeText(context, "接続成功", Toast.LENGTH_SHORT).show()
                 }
             }
 
@@ -311,7 +430,7 @@ class MainActivity : ComponentActivity() {
                 
                 scope.launch {
                     onDisconnect()
-                    snackbarHostState.showSnackbar("接続終了")
+                    Toast.makeText(context, "接続終了", Toast.LENGTH_SHORT).show()
                 }
             }
 
@@ -385,10 +504,15 @@ class MainActivity : ComponentActivity() {
                     context.startService(intent)
                 }
             }
+            
+            bluetoothClient.onVolumeReceived = { current, max ->
+                serverVolume = current
+                serverMaxVolume = max
+            }
 
             bluetoothClient.onError = { msg ->
                 scope.launch {
-                    snackbarHostState.showSnackbar(message = msg)
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             }
 
@@ -448,6 +572,7 @@ class MainActivity : ComponentActivity() {
                                 .clickable {
                                     connectingDevice = device
                                     connectedDeviceName = device.name ?: "不明"
+                                    Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
                                     scope.launch(Dispatchers.IO) {
                                         bluetoothClient.connect(device)
                                     }
@@ -599,6 +724,51 @@ class MainActivity : ComponentActivity() {
                             )
                             Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp)
                         }
+                        
+                        // サーバー音量操作 (プラスマイナスボタンとスライダー)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                        ) {
+                            IconButton(onClick = { 
+                                if (serverVolume > 0) {
+                                    serverVolume--
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                }
+                            }, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    painter = painterResource(R.drawable.minus_button), 
+                                    contentDescription = "Volume Down", 
+                                    modifier = Modifier.fillMaxSize(),
+                                    tint = Color.Unspecified
+                                )
+                            }
+                            
+                            Slider(
+                                value = serverVolume.toFloat(),
+                                onValueChange = { 
+                                    serverVolume = it.toInt()
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                },
+                                valueRange = 0f..serverMaxVolume.toFloat(),
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            IconButton(onClick = { 
+                                if (serverVolume < serverMaxVolume) {
+                                    serverVolume++
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                }
+                            }, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    painter = painterResource(R.drawable.plus_button), 
+                                    contentDescription = "Volume Up", 
+                                    modifier = Modifier.fillMaxSize(),
+                                    tint = Color.Unspecified
+                                )
+                            }
+                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
@@ -614,7 +784,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.scale(0.7f)
                                 )
-                                Text("一曲停止", fontSize = 12.sp)
+                                Text("一曲ごとに停止", fontSize = 12.sp)
                             }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
@@ -630,7 +800,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun ServerScreen(
         isBluetoothEnabled: Boolean, 
-        snackbarHostState: SnackbarHostState,
         onConnectBluetooth: (() -> Unit)? = null, 
         onStopCommunication: (() -> Unit)? = null,
         onCancel: () -> Unit
@@ -645,7 +814,7 @@ class MainActivity : ComponentActivity() {
         var isPlaying by remember { mutableStateOf(false) }
         var currentPosition by remember { mutableStateOf(0) }
         var duration by remember { mutableStateOf(0) }
-        val musicList = remember { getMusicList(context) }
+        val musicList = remember { getMusicListStatic(context) }
         var selectedTab by remember { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
         var isStopEachTrackEnabled by remember { mutableStateOf(false) }
@@ -746,7 +915,7 @@ class MainActivity : ComponentActivity() {
                         val stopIntent = Intent(context, MusicService::class.java)
                         context.stopService(stopIntent)
                         onCancel()
-                        snackbarHostState.showSnackbar("接続が切断されました")
+                        Toast.makeText(context, "接続が切断されました", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -901,7 +1070,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.scale(0.7f)
                                 )
-                                Text("一曲停止", fontSize = 12.sp)
+                                Text("一曲ごとに停止", fontSize = 12.sp)
                             }
                             Button(onClick = { 
                                 server?.stopServer()
@@ -1010,7 +1179,7 @@ class MainActivity : ComponentActivity() {
             val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
             val collection = MediaStore.Audio.Media.getContentUri(volume)
             val storageType = if (volume == "external_primary" || volume == "external") "内部" else "SD"
-            
+
             val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 arrayOf(
                     MediaStore.Audio.Media._ID,
@@ -1027,7 +1196,7 @@ class MainActivity : ComponentActivity() {
                     MediaStore.Audio.Media.ALBUM_ID
                 )
             }
-            
+
             val cursor = context.contentResolver.query(collection, projection, selection, null, null)
             cursor?.use {
                 val idColumn = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
@@ -1038,7 +1207,7 @@ class MainActivity : ComponentActivity() {
                     val id = it.getLong(idColumn)
                     val title = it.getString(titleColumn)
                     val albumId = it.getLong(albumIdColumn)
-                    
+
                     val fileName: String
                     val folderPath: String
                     val relativePathForGrouping: String
@@ -1059,12 +1228,12 @@ class MainActivity : ComponentActivity() {
 
                     val contentUri = Uri.withAppendedPath(collection, id.toString())
                     val folder = relativePathForGrouping.removeSuffix("/").substringAfterLast("/", "Unknown")
-                    
+
                     list.add(MusicItem(
-                        title = title, 
-                        uri = contentUri, 
-                        folder = folder.ifEmpty { "Root" }, 
-                        path = displayPath, 
+                        title = title,
+                        uri = contentUri,
+                        folder = folder.ifEmpty { "Root" },
+                        path = displayPath,
                         storage = storageType,
                         albumId = albumId
                     ))

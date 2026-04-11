@@ -44,6 +44,10 @@ class MusicService : Service() {
         const val ACTION_REMOTE_RESUME = "ACTION_REMOTE_RESUME"
         const val ACTION_UPDATE_STATE = "ACTION_UPDATE_STATE"
 
+        // フォアグラウンド状態更新用
+        const val ACTION_SET_FOREGROUND = "ACTION_SET_FOREGROUND"
+        const val EXTRA_IS_FOREGROUND = "EXTRA_IS_FOREGROUND"
+
         const val CHANNEL_ID = "music_channel"
         var instance: MusicService? = null
         
@@ -79,10 +83,49 @@ class MusicService : Service() {
     private var lastPlaybackPosition: Long = -1L
     private var lastPlaybackUpdateTime: Long = -1L
 
+    // タイムアウト監視用
+    private var lastInteractionTime = System.currentTimeMillis()
+    private var isAppInForeground = false 
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private val timeoutRunnable = object : Runnable {
+        override fun run() {
+            checkTimeout()
+            timeoutHandler.postDelayed(this, 30000) // 30秒ごとにチェック
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun updateLastInteractionTime() {
+        lastInteractionTime = System.currentTimeMillis()
+    }
+
+    private fun checkTimeout() {
+        val currentTime = System.currentTimeMillis()
+        val tenMinutes = 10 * 60 * 1000
+        // バックグラウンド かつ 非再生 かつ 10分間無操作 の場合に切断
+        if (!isAppInForeground && !isPlayingLocal && (currentTime - lastInteractionTime >= tenMinutes)) {
+            Log.d("MusicService", "10分間無操作（バックグラウンド）のため、自動切断します")
+            
+            // Bluetoothの切断
+            BluetoothClient.instance?.disconnect()
+            BluetoothServer.instance?.stopServer()
+            
+            // サービスの停止
+            stopForeground(true)
+            stopPlayer()
+            stopSelf()
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
+        
+        // 操作があった場合はタイマーをリセット (状態更新とフォアグラウンド通知以外)
+        if (action != null && action != ACTION_UPDATE_STATE && action != ACTION_SET_FOREGROUND) {
+            updateLastInteractionTime()
+        }
+
         val newTitle = intent?.getStringExtra("TITLE")
         val newDevice = intent?.getStringExtra("DEVICE")
         val newAlbumId = intent?.getLongExtra("ALBUM_ID", -1L) ?: -1L
@@ -108,6 +151,12 @@ class MusicService : Service() {
         }
 
         when (action) {
+            ACTION_SET_FOREGROUND -> {
+                isAppInForeground = intent?.getBooleanExtra(EXTRA_IS_FOREGROUND, false) ?: false
+                if (isAppInForeground) {
+                    updateLastInteractionTime()
+                }
+            }
             ACTION_PLAY -> {
                 val uriString = intent?.getStringExtra("MUSIC_URI")
                 currentUri = uriString
@@ -192,6 +241,7 @@ class MusicService : Service() {
     }
 
     fun pauseLocal() {
+        updateLastInteractionTime()
         isPlayingLocal = false
         try { mediaPlayer?.pause() } catch (_: Exception) {}
         updatePlaybackState(false, getCurrentPosition().toLong())
@@ -199,6 +249,7 @@ class MusicService : Service() {
     }
 
     fun resumeLocal() {
+        updateLastInteractionTime()
         isPlayingLocal = true
         try { mediaPlayer?.start() } catch (_: Exception) {}
         updatePlaybackState(true, getCurrentPosition().toLong())
@@ -324,18 +375,25 @@ class MusicService : Service() {
         }
     }
 
-    private fun createNotification(title: String, device: String, isPlaying: Boolean, bitmap: Bitmap?) =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun createNotification(title: String, device: String, isPlaying: Boolean, bitmap: Bitmap?): android.app.Notification {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(device)
             .setSmallIcon(R.drawable.small_logo)
             .setLargeIcon(bitmap ?: noImageBitmap)
+            .setContentIntent(pendingIntent)
             .addAction(createPreviousAction())
             .addAction(createPlayPauseAction(isPlaying))
             .addAction(createNextAction())
             .setStyle(MediaStyle().setMediaSession(mediaSession?.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .setOngoing(isPlaying)
             .build()
+    }
 
     private fun createPlayPauseAction(isPlaying: Boolean): NotificationCompat.Action {
         val actionIntent = Intent(this, MusicService::class.java).apply { action = if (isPlaying) ACTION_PAUSE else ACTION_RESUME }
@@ -358,7 +416,11 @@ class MusicService : Service() {
     fun isPlaying(): Boolean = isPlayingLocal
     fun getCurrentPosition(): Int = try { mediaPlayer?.currentPosition ?: 0 } catch (e: Exception) { 0 }
     fun getDuration(): Int = try { val d = mediaPlayer?.duration ?: 0; if (d < 0) 0 else d } catch (e: Exception) { 0 }
-    fun seekTo(position: Int) = try { mediaPlayer?.seekTo(position) } catch (e: Exception) { Log.e("MusicService", "Seek Error", e) }
+    
+    fun seekTo(position: Int) {
+        updateLastInteractionTime()
+        try { mediaPlayer?.seekTo(position) } catch (e: Exception) { Log.e("MusicService", "Seek Error", e) }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -378,6 +440,9 @@ class MusicService : Service() {
         }
         instance = this
         updatePlaybackState(false, 0)
+        
+        // タイムアウト監視を開始
+        timeoutHandler.post(timeoutRunnable)
     }
 
     private fun createNotificationChannel() {
@@ -388,6 +453,7 @@ class MusicService : Service() {
     }
 
     override fun onDestroy() {
+        timeoutHandler.removeCallbacks(timeoutRunnable)
         stopPlayer()
         mediaSession?.isActive = false
         mediaSession?.release()

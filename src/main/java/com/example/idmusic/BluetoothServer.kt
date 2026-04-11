@@ -18,6 +18,7 @@ import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.concurrent.Executors
+import android.media.AudioManager
 
 class BluetoothServer(private val context: Context) : Thread() {
 
@@ -27,6 +28,7 @@ class BluetoothServer(private val context: Context) : Thread() {
 
     private val adapter = BluetoothAdapter.getDefaultAdapter()
     private val uuid = UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315")
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private var lastState: String? = null
     private var isRunning = true
@@ -107,9 +109,13 @@ class BluetoothServer(private val context: Context) : Thread() {
             serverSocket = null
 
             onConnected?.invoke()
+            
+            // 接続時にサーバー側の音量を送信
+            sendCurrentVolume()
+            
             sendMusicList(musicListToSend)
             listenIncoming()
-            startProgressSender()
+            startStatusSender()
         } catch (e: Exception) {
             if (isRunning) Log.e("BT", "Server Run Error", e)
             stopServer()
@@ -119,6 +125,12 @@ class BluetoothServer(private val context: Context) : Thread() {
     fun sendProgress(position: Int, duration: Int) {
         if (duration <= 0) return
         sendMessage("PROGRESS:$position||$duration")
+    }
+
+    fun sendCurrentVolume() {
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        sendMessage("VOLUME:$current||$max")
     }
 
     private fun listenIncoming() {
@@ -179,6 +191,10 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
                 context.startService(intent)
             }
+            message.startsWith("VOLUME_SET:") -> {
+                val vol = message.removePrefix("VOLUME_SET:").toIntOrNull() ?: return
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, vol, 0)
+            }
             message == "DISCONNECT" -> stopServer()
         }
     }
@@ -234,18 +250,27 @@ class BluetoothServer(private val context: Context) : Thread() {
         sendMessage("STATE:$state")
     }
 
-    private fun startProgressSender() {
+    private fun startStatusSender() {
         thread {
+            var lastSentVol = -1
             while (isRunning) {
                 try {
+                    // 進捗送信
                     val service = MusicService.instance
                     if (service != null && service.isPlaying()) {
                         val pos = service.getCurrentPosition()
                         val dur = service.getDuration()
                         if (dur > 0) sendProgress(pos, dur)
                     }
+
+                    // 音量同期
+                    val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    if (currentVol != lastSentVol) {
+                        sendCurrentVolume()
+                        lastSentVol = currentVol
+                    }
                 } catch (e: Exception) {
-                    if (isRunning) Log.e("BT", "Progress Sender Error", e)
+                    if (isRunning) Log.e("BT", "Status Sender Error", e)
                 }
                 Thread.sleep(500)
             }

@@ -27,6 +27,7 @@ class BluetoothClient(private val context: Context) {
     var onClientNameReceived: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onProgress: ((Int, Int) -> Unit)? = null
+    var onVolumeReceived: ((Int, Int) -> Unit)? = null
 
     private val tempList = mutableListOf<MusicItem>()
 
@@ -82,6 +83,7 @@ class BluetoothClient(private val context: Context) {
     fun sendNext() { sendMessage("NEXT") }
     fun sendPrevious() { sendMessage("PREVIOUS") }
     fun sendStopEachTrack(enabled: Boolean) { sendMessage("SET_STOP_EACH:${if (enabled) "ON" else "OFF"}") }
+    fun sendVolumeSet(volume: Int) { sendMessage("VOLUME_SET:$volume") }
     
     fun sendDisconnect() { 
         Thread {
@@ -135,6 +137,14 @@ class BluetoothClient(private val context: Context) {
                 val parts = line.removePrefix("PROGRESS:").split("||")
                 if (parts.size == 2) {
                     onProgress?.invoke(parts[0].toInt(), parts[1].toInt())
+                }
+            }
+            line.startsWith("VOLUME:") -> {
+                val parts = line.removePrefix("VOLUME:").split("||")
+                if (parts.size == 2) {
+                    val current = parts[0].toIntOrNull() ?: 0
+                    val max = parts[1].toIntOrNull() ?: 15
+                    onVolumeReceived?.invoke(current, max)
                 }
             }
             line == "END" -> {
