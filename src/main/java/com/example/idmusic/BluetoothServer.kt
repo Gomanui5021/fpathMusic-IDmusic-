@@ -19,6 +19,14 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.concurrent.Executors
 import android.media.AudioManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.content.ContentUris
+import android.util.Base64
+import java.io.ByteArrayOutputStream
+import android.media.MediaMetadataRetriever
+import android.os.Build
 
 class BluetoothServer(private val context: Context) : Thread() {
 
@@ -39,6 +47,7 @@ class BluetoothServer(private val context: Context) : Thread() {
     private var reader: BufferedReader? = null
     
     private val sendExecutor = Executors.newSingleThreadExecutor()
+    private val sentAlbumArts = Collections.synchronizedSet(mutableSetOf<Long>())
 
     var onConnected: (() -> Unit)? = null
     var onPlay: ((String) -> Unit)? = null
@@ -109,6 +118,7 @@ class BluetoothServer(private val context: Context) : Thread() {
             serverSocket = null
 
             onConnected?.invoke()
+            sentAlbumArts.clear()
             
             // 接続時にサーバー側の音量を送信
             sendCurrentVolume()
@@ -164,6 +174,11 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
                 context.startService(intent)
                 onPlay?.invoke(path)
+                
+                // 再生開始時にアルバムアートを送信（未送信の場合）
+                musicListToSend.find { it.uri.toString() == path }?.let {
+                    sendAlbumArt(it.albumId, it.uri.toString())
+                }
             }
             message == "PAUSE" -> {
                 sendState("PAUSED")
@@ -195,11 +210,72 @@ class BluetoothServer(private val context: Context) : Thread() {
                 val vol = message.removePrefix("VOLUME_SET:").toIntOrNull() ?: return
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, vol, 0)
             }
+            message.startsWith("GET_ART:") -> {
+                val parts = message.removePrefix("GET_ART:").split("||")
+                if (parts.size == 2) {
+                    sendAlbumArt(parts[0].toLongOrNull() ?: -1L, parts[1])
+                }
+            }
             message == "DISCONNECT" -> stopServer()
         }
     }
 
     fun send(message: String) = sendMessage(message)
+
+    fun sendAlbumArt(albumId: Long, uriString: String?) {
+        if (albumId <= 0 && uriString == null) return
+        if (sentAlbumArts.contains(albumId) && albumId > 0) return
+
+        sendExecutor.execute {
+            try {
+                var bitmap: Bitmap? = null
+                if (albumId > 0) {
+                    try {
+                        val artworkUri = Uri.parse("content://media/external/audio/albumart")
+                        val uri = ContentUris.withAppendedId(artworkUri, albumId)
+                        context.contentResolver.openInputStream(uri)?.use { 
+                            bitmap = BitmapFactory.decodeStream(it)
+                        }
+                    } catch (e: Exception) {}
+                }
+                
+                if (bitmap == null && uriString != null) {
+                    try {
+                        val retriever = MediaMetadataRetriever()
+                        retriever.setDataSource(context, Uri.parse(uriString))
+                        val art = retriever.embeddedPicture
+                        if (art != null) {
+                            bitmap = BitmapFactory.decodeByteArray(art, 0, art.size)
+                        }
+                        retriever.release()
+                    } catch (e: Exception) {}
+                }
+
+                bitmap?.let {
+                    // 画像を圧縮 (300x300程度にリサイズ)
+                    val size = 300
+                    val scaled = if (it.width > size || it.height > size) {
+                        val scale = size.toFloat() / Math.max(it.width, it.height)
+                        Bitmap.createScaledBitmap(it, (it.width * scale).toInt(), (it.height * scale).toInt(), true)
+                    } else it
+                    
+                    val out = ByteArrayOutputStream()
+                    // WebP または JPEG で圧縮 (容量を減らす)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, 75, out)
+                    } else {
+                        scaled.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                    }
+                    val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                    
+                    sendMessage("ART:$albumId||$base64")
+                    if (albumId > 0) sentAlbumArts.add(albumId)
+                }
+            } catch (e: Exception) {
+                Log.e("BT", "Send Art Error", e)
+            }
+        }
+    }
 
     fun pauseMusic() {
         sendState("PAUSED")

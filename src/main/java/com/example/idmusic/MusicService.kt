@@ -118,6 +118,12 @@ class MusicService : Service() {
         }
     }
 
+    fun updateCurrentBitmap(bitmap: Bitmap) {
+        currentBitmap = bitmap
+        updateMetadata(currentTitle ?: "不明", currentBitmap, currentDuration, currentAlbumId)
+        updateNotification(isPlayingLocal)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         
@@ -141,7 +147,7 @@ class MusicService : Service() {
             thread {
                 val bitmap = getAlbumArtBitmap(newAlbumId, musicUri)
                 Handler(Looper.getMainLooper()).post {
-                    if (currentAlbumId == newAlbumId) {
+                    if (currentAlbumId == newAlbumId && bitmap != null) {
                         currentBitmap = bitmap
                         updateMetadata(currentTitle ?: "不明", currentBitmap, currentDuration, currentAlbumId)
                         updateNotification(isPlayingLocal)

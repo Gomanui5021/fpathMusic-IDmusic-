@@ -13,6 +13,11 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.io.BufferedWriter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
+import java.io.File
+import java.io.FileOutputStream
 
 class BluetoothClient(private val context: Context) {
 
@@ -28,11 +33,29 @@ class BluetoothClient(private val context: Context) {
     var onError: ((String) -> Unit)? = null
     var onProgress: ((Int, Int) -> Unit)? = null
     var onVolumeReceived: ((Int, Int) -> Unit)? = null
+    var onAlbumArtReceived: ((Long, Bitmap) -> Unit)? = null
 
     private val tempList = mutableListOf<MusicItem>()
+    private val cacheDir = File(context.filesDir, "Fpathmusic").apply { if (!exists()) mkdirs() }
 
     companion object {
         var instance: BluetoothClient? = null
+    }
+
+    fun getCachedArt(albumId: Long): Bitmap? {
+        val file = File(cacheDir, "$albumId.webp")
+        return if (file.exists()) {
+            BitmapFactory.decodeFile(file.absolutePath)
+        } else null
+    }
+
+    private fun saveArtToCache(albumId: Long, bytes: ByteArray) {
+        val file = File(cacheDir, "$albumId.webp")
+        try {
+            FileOutputStream(file).use { it.write(bytes) }
+        } catch (e: Exception) {
+            Log.e("BT", "Save Art Error", e)
+        }
     }
 
     fun connect(device: BluetoothDevice) {
@@ -84,6 +107,11 @@ class BluetoothClient(private val context: Context) {
     fun sendPrevious() { sendMessage("PREVIOUS") }
     fun sendStopEachTrack(enabled: Boolean) { sendMessage("SET_STOP_EACH:${if (enabled) "ON" else "OFF"}") }
     fun sendVolumeSet(volume: Int) { sendMessage("VOLUME_SET:$volume") }
+    
+    fun requestAlbumArt(albumId: Long, uri: String) {
+        if (File(cacheDir, "$albumId.webp").exists()) return
+        sendMessage("GET_ART:$albumId||$uri")
+    }
     
     fun sendDisconnect() { 
         Thread {
@@ -147,10 +175,39 @@ class BluetoothClient(private val context: Context) {
                     onVolumeReceived?.invoke(current, max)
                 }
             }
+            line.startsWith("ART:") -> {
+                val parts = line.removePrefix("ART:").split("||")
+                if (parts.size == 2) {
+                    val albumId = parts[0].toLongOrNull() ?: -1L
+                    val base64 = parts[1]
+                    try {
+                        val bytes = Base64.decode(base64, Base64.DEFAULT)
+                        saveArtToCache(albumId, bytes)
+                        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        if (bitmap != null) {
+                            CoroutineScope(Dispatchers.Main).launch {
+                                onAlbumArtReceived?.invoke(albumId, bitmap)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("BT", "Decode Art Error", e)
+                    }
+                }
+            }
             line == "END" -> {
                 val result = tempList.sortedWith(compareBy({ it.folder }, { it.title })).toList()
                 tempList.clear()
                 CoroutineScope(Dispatchers.Main).launch { onReceiveMusicList?.invoke(result) }
+                
+                // リスト受信後に足りないジャケットを一括リクエスト（バックグラウンドで）
+                Thread {
+                    result.forEach { 
+                        if (it.albumId > 0 && !File(cacheDir, "${it.albumId}.webp").exists()) {
+                            sendMessage("GET_ART:${it.albumId}||${it.uri}")
+                            Thread.sleep(100) // 負荷軽減
+                        }
+                    }
+                }.start()
             }
             else -> onReceiveMessage?.invoke(line)
         }

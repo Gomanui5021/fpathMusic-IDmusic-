@@ -46,6 +46,7 @@ import androidx.compose.ui.res.painterResource
 import java.io.File
 import android.content.ContentUris
 import androidx.compose.ui.draw.scale
+import android.graphics.Bitmap
 
 class MainActivity : ComponentActivity() {
 
@@ -350,6 +351,10 @@ class MainActivity : ComponentActivity() {
         // 音量同期用
         var serverVolume by remember { mutableStateOf(0) }
         var serverMaxVolume by remember { mutableStateOf(15) }
+        
+        // アルバムアートキャッシュ管理用カウンター (再描画トリガー)
+        var artUpdateCounter by remember { mutableStateOf(0) }
+        val cacheFolder = remember { File(context.filesDir, "Fpathmusic") }
 
         val view = LocalView.current
         SideEffect {
@@ -365,6 +370,13 @@ class MainActivity : ComponentActivity() {
             isPlaying = true
             duration = 0
             currentPosition = 0
+            
+            // 再生開始時に、もしキャッシュがあればMusicServiceに即適用
+            if (song.albumId > 0) {
+                bluetoothClient.getCachedArt(song.albumId)?.let {
+                    MusicService.instance?.updateCurrentBitmap(it)
+                }
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -420,7 +432,6 @@ class MainActivity : ComponentActivity() {
                     connectingDevice = null
                     Toast.makeText(context, "接続成功", Toast.LENGTH_SHORT).show()
                     
-                    // 接続成功時、サービスの状態を更新
                     val intent = Intent(context, MusicService::class.java).apply {
                         action = MusicService.ACTION_UPDATE_STATE
                         putExtra("IS_PLAYING", false)
@@ -439,8 +450,6 @@ class MainActivity : ComponentActivity() {
                 context.stopService(intent)
                 
                 scope.launch {
-                    // 接続失敗や意図しない切断時は、役割選択画面に戻らずデバイス選択のままにする
-                    // onDisconnect() // ここをコメントアウトすることで role=null になるのを防ぐ
                     Toast.makeText(context, "切断されました", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -475,6 +484,11 @@ class MainActivity : ComponentActivity() {
                                 isPlaying = true
                                 duration = 0
                                 currentPosition = 0
+                                
+                                // 受信側での再生開始に合わせてキャッシュがあれば適用
+                                bluetoothClient.getCachedArt(song.albumId)?.let {
+                                    MusicService.instance?.updateCurrentBitmap(it)
+                                }
 
                                 val intent = Intent(context, MusicService::class.java).apply {
                                     action = MusicService.ACTION_UPDATE_STATE
@@ -520,11 +534,19 @@ class MainActivity : ComponentActivity() {
                 serverVolume = current
                 serverMaxVolume = max
             }
+            
+            bluetoothClient.onAlbumArtReceived = { albumId, bitmap ->
+                // 新しい画像が保存されたらリストを更新させる
+                artUpdateCounter++
+                // 再生中の曲なら即適用
+                if (musicItems.find { it.uri.toString() == currentSongUri }?.albumId == albumId) {
+                    MusicService.instance?.updateCurrentBitmap(bitmap)
+                }
+            }
 
             bluetoothClient.onError = { msg ->
                 scope.launch {
                     connectingDevice = null
-                    // エラー時はサービスを停止
                     val intent = Intent(context, MusicService::class.java)
                     context.stopService(intent)
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -589,7 +611,6 @@ class MainActivity : ComponentActivity() {
                                     connectedDeviceName = device.name ?: "不明"
                                     Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
                                     
-                                    // 接続開始時にサービスを起動してプロセスを保護
                                     val intent = Intent(context, MusicService::class.java).apply {
                                         action = MusicService.ACTION_UPDATE_STATE
                                         putExtra("IS_PLAYING", false)
@@ -642,6 +663,7 @@ class MainActivity : ComponentActivity() {
                         if (isExpanded) {
                             items(songs) { song ->
                                 val isCurrent = song.uri.toString() == currentSongUri
+                                
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -650,27 +672,47 @@ class MainActivity : ComponentActivity() {
                                         .padding(12.dp)
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (isCurrent) {
-                                            Icon(
-                                                painter = painterResource(android.R.drawable.ic_media_play),
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp),
-                                                tint = MaterialTheme.colorScheme.primary
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                if (isCurrent) {
+                                                    Icon(
+                                                        painter = painterResource(android.R.drawable.ic_media_play),
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp),
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                }
+                                                Text(
+                                                    text = song.title,
+                                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                                )
+                                            }
+                                            Text(
+                                                text = "[${song.storage}] ${song.path}",
+                                                fontSize = 12.sp,
+                                                color = Color.Gray.copy(alpha = 0.7f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
-                                            Spacer(modifier = Modifier.width(4.dp))
                                         }
-                                        Text(
-                                            text = song.title,
-                                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
-                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        
+                                        // artUpdateCounterをKeyに入れることで、画像受信時に再描画を強制する
+                                        key(song.albumId, artUpdateCounter) {
+                                            val artFile = File(cacheFolder, "${song.albumId}.webp")
+                                            Image(
+                                                painter = rememberAsyncImagePainter(
+                                                    model = if (artFile.exists()) artFile else R.drawable.no_image,
+                                                    error = painterResource(R.drawable.no_image),
+                                                    placeholder = painterResource(R.drawable.no_image)
+                                                ),
+                                                contentDescription = "Song Album Art",
+                                                modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        }
                                     }
-                                    Text(
-                                        text = "[${song.storage}] ${song.path}",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray.copy(alpha = 0.7f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
                                 }
                                 HorizontalDivider(thickness = 2.dp, color = Color.Gray)
                             }
@@ -693,6 +735,7 @@ class MainActivity : ComponentActivity() {
                                 overflow = TextOverflow.Ellipsis
                                 )
                         }
+                        
                         Text("接続デバイス: $connectedDeviceName")
 
                         Row(
@@ -769,6 +812,8 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             
+                            Spacer(modifier = Modifier.width(8.dp)) // ボタンとスライダーの間に間隔を追加
+
                             Slider(
                                 value = serverVolume.toFloat(),
                                 onValueChange = { 
@@ -779,6 +824,8 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.weight(1f)
                             )
                             
+                            Spacer(modifier = Modifier.width(8.dp)) // ボタンとスライダーの間に間隔を追加
+
                             IconButton(onClick = { 
                                 if (serverVolume < serverMaxVolume) {
                                     serverVolume++
@@ -912,7 +959,6 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(Unit) {
             if (isBluetoothEnabled && server != null) {
-                // 受信待機開始時にサービスを起動してプロセスを保護
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_UPDATE_STATE
                     putExtra("IS_PLAYING", false)
