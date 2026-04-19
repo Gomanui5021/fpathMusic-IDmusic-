@@ -419,18 +419,29 @@ class MainActivity : ComponentActivity() {
                     isConnected = true
                     connectingDevice = null
                     Toast.makeText(context, "接続成功", Toast.LENGTH_SHORT).show()
+                    
+                    // 接続成功時、サービスの状態を更新
+                    val intent = Intent(context, MusicService::class.java).apply {
+                        action = MusicService.ACTION_UPDATE_STATE
+                        putExtra("IS_PLAYING", false)
+                        putExtra("TITLE", "接続済み")
+                        putExtra("DEVICE", connectedDeviceName)
+                    }
+                    context.startService(intent)
                 }
             }
 
 
             bluetoothClient.onDisconnected = {
                 isConnected = false
+                connectingDevice = null
                 val intent = Intent(context, MusicService::class.java)
                 context.stopService(intent)
                 
                 scope.launch {
-                    onDisconnect()
-                    Toast.makeText(context, "接続終了", Toast.LENGTH_SHORT).show()
+                    // 接続失敗や意図しない切断時は、役割選択画面に戻らずデバイス選択のままにする
+                    // onDisconnect() // ここをコメントアウトすることで role=null になるのを防ぐ
+                    Toast.makeText(context, "切断されました", Toast.LENGTH_SHORT).show()
                 }
             }
 
@@ -512,6 +523,10 @@ class MainActivity : ComponentActivity() {
 
             bluetoothClient.onError = { msg ->
                 scope.launch {
+                    connectingDevice = null
+                    // エラー時はサービスを停止
+                    val intent = Intent(context, MusicService::class.java)
+                    context.stopService(intent)
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             }
@@ -573,6 +588,16 @@ class MainActivity : ComponentActivity() {
                                     connectingDevice = device
                                     connectedDeviceName = device.name ?: "不明"
                                     Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
+                                    
+                                    // 接続開始時にサービスを起動してプロセスを保護
+                                    val intent = Intent(context, MusicService::class.java).apply {
+                                        action = MusicService.ACTION_UPDATE_STATE
+                                        putExtra("IS_PLAYING", false)
+                                        putExtra("TITLE", "接続中...")
+                                        putExtra("DEVICE", device.name ?: "不明")
+                                    }
+                                    ContextCompat.startForegroundService(context, intent)
+
                                     scope.launch(Dispatchers.IO) {
                                         bluetoothClient.connect(device)
                                     }
@@ -735,7 +760,7 @@ class MainActivity : ComponentActivity() {
                                     serverVolume--
                                     bluetoothClient.sendVolumeSet(serverVolume)
                                 }
-                            }, modifier = Modifier.size(48.dp)) {
+                            }, modifier = Modifier.size(45.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.minus_button), 
                                     contentDescription = "Volume Down", 
@@ -759,7 +784,7 @@ class MainActivity : ComponentActivity() {
                                     serverVolume++
                                     bluetoothClient.sendVolumeSet(serverVolume)
                                 }
-                            }, modifier = Modifier.size(48.dp)) {
+                            }, modifier = Modifier.size(45.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.plus_button), 
                                     contentDescription = "Volume Up", 
@@ -887,6 +912,15 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(Unit) {
             if (isBluetoothEnabled && server != null) {
+                // 受信待機開始時にサービスを起動してプロセスを保護
+                val intent = Intent(context, MusicService::class.java).apply {
+                    action = MusicService.ACTION_UPDATE_STATE
+                    putExtra("IS_PLAYING", false)
+                    putExtra("TITLE", "接続待機中")
+                    putExtra("DEVICE", "Bluetooth")
+                }
+                ContextCompat.startForegroundService(context, intent)
+
                 server.setMusicList(musicList)
                 server.start()
                 server.onClientNameReceived = { name -> CoroutineScope(Dispatchers.Main).launch { clientName = name } }
