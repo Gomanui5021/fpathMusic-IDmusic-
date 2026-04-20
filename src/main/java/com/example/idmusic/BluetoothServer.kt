@@ -56,6 +56,7 @@ class BluetoothServer(private val context: Context) : Thread() {
     var onAutoSkipSync: ((Boolean) -> Unit)? = null // 設定同期用
     var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
+    var onReceiveMessage: ((String) -> Unit)? = null
 
     private var musicListToSend: List<MusicItem> = emptyList()
 
@@ -217,6 +218,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
             }
             message == "DISCONNECT" -> stopServer()
+            else -> onReceiveMessage?.invoke(message)
         }
     }
 

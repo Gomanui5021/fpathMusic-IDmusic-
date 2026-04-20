@@ -47,6 +47,10 @@ import java.io.File
 import android.content.ContentUris
 import androidx.compose.ui.draw.scale
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
+import com.example.idmusic.ui.theme.IDmusicTheme
+import androidx.compose.ui.graphics.ColorFilter
 
 class MainActivity : ComponentActivity() {
 
@@ -126,95 +130,98 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
 
         setContent {
-            val context = LocalContext.current
-            var isPermissionGranted by remember { mutableStateOf(false) }
-            val scope = rememberCoroutineScope()
+            IDmusicTheme {
+                val context = LocalContext.current
+                var isPermissionGranted by remember { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
 
-            // 通常権限（音楽 + Bluetooth）
-            val launcher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestMultiplePermissions()
-            ) { result ->
-                val audio = if (Build.VERSION.SDK_INT >= 33) {
-                    result[Manifest.permission.READ_MEDIA_AUDIO] == true
+                // 通常権限（音楽 + Bluetooth）
+                val launcher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestMultiplePermissions()
+                ) { result ->
+                    val audio = if (Build.VERSION.SDK_INT >= 33) {
+                        result[Manifest.permission.READ_MEDIA_AUDIO] == true
+                    } else {
+                        result[Manifest.permission.READ_EXTERNAL_STORAGE] == true
+                    }
+
+                    val bt = if (Build.VERSION.SDK_INT >= 31) {
+                        result[Manifest.permission.BLUETOOTH_CONNECT] == true
+                    } else true
+
+                    val scan = if (Build.VERSION.SDK_INT >= 31) {
+                        result[Manifest.permission.BLUETOOTH_SCAN] == true
+                    } else true
+
+                    isPermissionGranted = audio && bt && scan
+                }
+
+                // 通知権限（後回し）
+                val notificationLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { granted ->
+                    Log.d("Permission", "通知権限: $granted")
+                }
+
+
+                LaunchedEffect(Unit) {
+
+                    val neededPermissions = if (Build.VERSION.SDK_INT >= 33) {
+                        // Android13+
+                        listOf(
+                            Manifest.permission.READ_MEDIA_AUDIO,
+                            Manifest.permission.BLUETOOTH_CONNECT,
+                            Manifest.permission.BLUETOOTH_SCAN
+                        )
+                    } else {
+                        // Android9〜12
+                        listOf(
+                            Manifest.permission.READ_EXTERNAL_STORAGE,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        )
+                    }
+
+                    val notGranted = neededPermissions.filter {
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            it
+                        ) != PackageManager.PERMISSION_GRANTED
+                    }
+
+                    if (notGranted.isNotEmpty()) {
+                        launcher.launch(notGranted.toTypedArray())
+                    } else {
+                        isPermissionGranted = true
+                    }
+                }
+
+                if (!isPermissionGranted) {
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Text(
+                            text = "権限を許可してください...",
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(y = (-180).dp)
+                        )
+                    }
                 } else {
-                    result[Manifest.permission.READ_EXTERNAL_STORAGE] == true
-                }
-
-                val bt = if (Build.VERSION.SDK_INT >= 31) {
-                    result[Manifest.permission.BLUETOOTH_CONNECT] == true
-                } else true
-
-                val scan = if (Build.VERSION.SDK_INT >= 31) {
-                    result[Manifest.permission.BLUETOOTH_SCAN] == true
-                } else true
-
-                isPermissionGranted = audio && bt && scan
-            }
-
-            // 通知権限（後回し）
-            val notificationLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission()
-            ) { granted ->
-                Log.d("Permission", "通知権限: $granted")
-            }
-
-
-            LaunchedEffect(Unit) {
-
-                val neededPermissions = if (Build.VERSION.SDK_INT >= 33) {
-                    // Android13+
-                    listOf(
-                        Manifest.permission.READ_MEDIA_AUDIO,
-                        Manifest.permission.BLUETOOTH_CONNECT,
-                        Manifest.permission.BLUETOOTH_SCAN
-                    )
-                } else {
-                    // Android9〜12
-                    listOf(
-                        Manifest.permission.READ_EXTERNAL_STORAGE,
-                        Manifest.permission.ACCESS_FINE_LOCATION
-                    )
-                }
-
-                val notGranted = neededPermissions.filter {
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        it
-                    ) != PackageManager.PERMISSION_GRANTED
-                }
-
-                if (notGranted.isNotEmpty()) {
-                    launcher.launch(notGranted.toTypedArray())
-                } else {
-                    isPermissionGranted = true
-                }
-            }
-
-            if (!isPermissionGranted) {
-                Box(
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Text(
-                        text = "権限を許可してください...",
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(y = (-180).dp)
-                    )
-                }
-            } else {
-                var role by remember { mutableStateOf<String?>(null) }
-                Scaffold { padding ->
-                    Box(modifier = Modifier.padding(padding)) {
-                        when (role) {
-                            null -> RoleSelectScreen { role = it }
-                            "CLIENT" -> MusicScreen(notificationLauncher) { role = null }
-                            "SERVER" -> ServerScreen(isBluetoothEnabled = true, onStopCommunication = { role = "LOCAL" }) { role = null }
-                            "LOCAL" -> ServerScreen(isBluetoothEnabled = false, onConnectBluetooth = { role = "SERVER" }) { role = null }
+                    var role by remember { mutableStateOf<String?>(null) }
+                    Scaffold { padding ->
+                        Box(modifier = Modifier.padding(padding)) {
+                            when (role) {
+                                null -> RoleSelectScreen { role = it }
+                                "CLIENT" -> MusicScreen(notificationLauncher) { role = null }
+                                "SERVER" -> ServerScreen(isBluetoothEnabled = true, onStopCommunication = { role = "LOCAL" }) { role = null }
+                                "LOCAL" -> ServerScreen(isBluetoothEnabled = false, onConnectBluetooth = { role = "SERVER" }) { role = null }
+                            }
                         }
                     }
                 }
@@ -296,27 +303,33 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center
             ) {
-                Button(
+                OutlinedButton(
                     onClick = { onSelect("CLIENT") },
-                    modifier = Modifier.fillMaxWidth().padding(12.dp)
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    border = BorderStroke(1.dp, Color.Black),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
                 ) {
                     Text("送信側")
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Button(
+                OutlinedButton(
                     onClick = { onSelect("SERVER") },
-                    modifier = Modifier.fillMaxWidth().padding(12.dp)
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    border = BorderStroke(1.dp, Color.Black),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
                 ) {
                     Text("受信側")
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Button(
+                OutlinedButton(
                     onClick = { onSelect("LOCAL") },
-                    modifier = Modifier.fillMaxWidth().padding(12.dp)
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    border = BorderStroke(1.dp, Color.Black),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
                 ) {
                     Text("ローカル再生")
                 }
@@ -325,6 +338,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---------------- Client ----------------
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun MusicScreen(
         notificationLauncher: androidx.activity.compose.ManagedActivityResultLauncher<String, Boolean>,
@@ -346,7 +360,8 @@ class MainActivity : ComponentActivity() {
         var connectingDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
 
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
-        var isStopEachTrackEnabled by remember { mutableStateOf(false) }
+        var isRepeatEnabled by remember { mutableStateOf(false) }
+        var isShuffleEnabled by remember { mutableStateOf(false) }
         
         // 音量同期用
         var serverVolume by remember { mutableStateOf(0) }
@@ -397,6 +412,16 @@ class MainActivity : ComponentActivity() {
 
         fun skipNext() {
             val currentIndex = musicItems.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (isShuffleEnabled) {
+                val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
+                if (currentSong != null) {
+                    val folderSongs = musicItems.filter { it.folder == currentSong.folder }
+                    if (folderSongs.isNotEmpty()) {
+                        playSong(folderSongs.random())
+                        return
+                    }
+                }
+            }
             if (currentIndex != -1 && currentIndex < musicItems.size - 1) {
                 playSong(musicItems[currentIndex + 1])
             }
@@ -409,9 +434,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(isStopEachTrackEnabled) {
+        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, musicItems, currentSongUri) {
             MusicService.onTrackEnded = {
-                if (!isStopEachTrackEnabled) {
+                if (isRepeatEnabled) {
+                    val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
+                    if (currentSong != null) {
+                        scope.launch { playSong(currentSong) }
+                    } else {
+                        scope.launch { skipNext() }
+                    }
+                } else {
                     scope.launch { skipNext() }
                 }
             }
@@ -501,8 +533,11 @@ class MainActivity : ComponentActivity() {
                                 context.startService(intent)
                             }
                         }
-                        message.startsWith("SET_STOP_EACH:") -> {
-                            isStopEachTrackEnabled = message.removePrefix("SET_STOP_EACH:") == "ON"
+                        message.startsWith("SET_REPEAT:") -> {
+                            isRepeatEnabled = message.removePrefix("SET_REPEAT:") == "ON"
+                        }
+                        message.startsWith("SET_SHUFFLE:") -> {
+                            isShuffleEnabled = message.removePrefix("SET_SHUFFLE:") == "ON"
                         }
                         message == "NEXT" -> skipNext()
                         message == "PREVIOUS" -> skipPrevious()
@@ -592,7 +627,11 @@ class MainActivity : ComponentActivity() {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 if (!isConnected) {
-                    Button(onClick = { onDisconnect() }) {
+                    OutlinedButton(
+                        onClick = { onDisconnect() },
+                        border = BorderStroke(1.dp, Color.Black),
+                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                    ) {
                         Text("← 戻る")
                     }
                 }
@@ -628,7 +667,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Text(text = device.name ?: "不明", modifier = Modifier.weight(1f))
                             if (connectingDevice == device) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Black)
                             }
                         }
                     }
@@ -653,10 +692,11 @@ class MainActivity : ComponentActivity() {
                                     Icon(
                                         painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
                                         contentDescription = null,
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(24.dp),
+                                        tint = Color.Black
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(text = folder)
+                                    Text(text = folder, color = Color.Black)
                                 }
                             }
                         }
@@ -676,16 +716,16 @@ class MainActivity : ComponentActivity() {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 if (isCurrent) {
                                                     Icon(
-                                                        painter = painterResource(android.R.drawable.ic_media_play),
+                                                        painter = painterResource(R.drawable.play),
                                                         contentDescription = null,
                                                         modifier = Modifier.size(16.dp),
-                                                        tint = MaterialTheme.colorScheme.primary
+                                                        tint = Color.Black
                                                     )
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                 }
                                                 Text(
                                                     text = song.title,
-                                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                                    color = if (isCurrent) Color.Black else Color.DarkGray
                                                 )
                                             }
                                             Text(
@@ -724,19 +764,21 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp),
-                    elevation = CardDefaults.cardElevation(8.dp)
+                    elevation = CardDefaults.cardElevation(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(8.dp)) {
                         if (currentSongTitle != null) {
                             Text(
                                 text = "♪: $currentSongTitle",
                                 style = MaterialTheme.typography.titleMedium,
+                                color = Color.Black,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                                 )
                         }
                         
-                        Text("接続デバイス: $connectedDeviceName")
+                        Text("接続デバイス: $connectedDeviceName", color = Color.Black)
 
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -744,10 +786,16 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(onClick = { skipPrevious() }) {
-                                Icon(painterResource(android.R.drawable.ic_media_previous), contentDescription = "Skip Previous")
+                                Icon(
+                                    painter = painterResource(R.drawable.skip_left),
+                                    contentDescription = "Skip Previous", 
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(48.dp)
+                                )
                             }
                             Spacer(modifier = Modifier.width(16.dp))
-                            Button(
+                            // 再生・一時停止ボタン
+                            OutlinedButton(
                                 onClick = {
                                     if (isPlaying) {
                                         bluetoothClient.sendPause()
@@ -764,16 +812,28 @@ class MainActivity : ComponentActivity() {
                                         putExtra("DURATION", duration)
                                     }
                                     context.startService(intent)
-                                }
+                                },
+                                modifier = Modifier.width(90.dp).height(56.dp),
+                                shape = RoundedCornerShape(percent = 50),
+                                border = BorderStroke(1.dp, Color.Black),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                contentPadding = PaddingValues(0.dp)
                             ) {
                                 Icon(
-                                    painter = painterResource(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play),
-                                    contentDescription = "Play/Pause"
+                                    painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
+                                    contentDescription = "Play/Pause",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(32.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.width(16.dp))
                             IconButton(onClick = { skipNext() }) {
-                                Icon(painterResource(android.R.drawable.ic_media_next), contentDescription = "Skip Next")
+                                Icon(
+                                    painter = painterResource(R.drawable.skip_right),
+                                    contentDescription = "Skip Next", 
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(48.dp)
+                                )
                             }
                         }
 
@@ -782,15 +842,37 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
                         ) {
-                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp)
+                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
                             Slider(
                                 value = sliderValue,
                                 onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
                                 onValueChangeFinished = { if (duration > 0) bluetoothClient.sendSeek(currentPosition) },
                                 modifier = Modifier.weight(1f),
-                                enabled = duration > 0
+                                enabled = duration > 0,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.Black, 
+                                    activeTrackColor = Color.Black,
+                                    inactiveTrackColor = Color.LightGray
+                                ),
+                                thumb = {
+                                    Surface(
+                                        modifier = Modifier.size(12.dp),
+                                        shape = CircleShape,
+                                        color = Color.Black
+                                    ) {}
+                                },
+                                track = { sliderState ->
+                                    SliderDefaults.Track(
+                                        sliderState = sliderState,
+                                        modifier = Modifier.height(2.dp),
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = Color.Black,
+                                            inactiveTrackColor = Color.LightGray
+                                        )
+                                    )
+                                }
                             )
-                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp)
+                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
                         }
                         
                         // サーバー音量操作 (プラスマイナスボタンとスライダー)
@@ -805,14 +887,14 @@ class MainActivity : ComponentActivity() {
                                 }
                             }, modifier = Modifier.size(45.dp)) {
                                 Icon(
-                                    painter = painterResource(R.drawable.minus_button), 
+                                    painter = painterResource(R.drawable.volume_down),
                                     contentDescription = "Volume Down", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Unspecified
+                                    tint = Color.Black
                                 )
                             }
                             
-                            Spacer(modifier = Modifier.width(8.dp)) // ボタンとスライダーの間に間隔を追加
+                            Spacer(modifier = Modifier.width(16.dp)) // ボタンとスライダーの間に間隔を追加
 
                             Slider(
                                 value = serverVolume.toFloat(),
@@ -821,10 +903,32 @@ class MainActivity : ComponentActivity() {
                                     bluetoothClient.sendVolumeSet(serverVolume)
                                 },
                                 valueRange = 0f..serverMaxVolume.toFloat(),
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.Black, 
+                                    activeTrackColor = Color.Black,
+                                    inactiveTrackColor = Color.LightGray
+                                ),
+                                thumb = {
+                                    Surface(
+                                        modifier = Modifier.size(12.dp),
+                                        shape = CircleShape,
+                                        color = Color.Black
+                                    ) {}
+                                },
+                                track = { sliderState ->
+                                    SliderDefaults.Track(
+                                        sliderState = sliderState,
+                                        modifier = Modifier.height(2.dp),
+                                        colors = SliderDefaults.colors(
+                                            activeTrackColor = Color.Black,
+                                            inactiveTrackColor = Color.LightGray
+                                        )
+                                    )
+                                }
                             )
                             
-                            Spacer(modifier = Modifier.width(8.dp)) // ボタンとスライダーの間に間隔を追加
+                            Spacer(modifier = Modifier.width(16.dp)) // ボタンとスライダーの間に間隔を追加
 
                             IconButton(onClick = { 
                                 if (serverVolume < serverMaxVolume) {
@@ -833,13 +937,13 @@ class MainActivity : ComponentActivity() {
                                 }
                             }, modifier = Modifier.size(45.dp)) {
                                 Icon(
-                                    painter = painterResource(R.drawable.plus_button), 
+                                    painter = painterResource(R.drawable.volume_up),
                                     contentDescription = "Volume Up", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Unspecified
+                                    tint = Color.Black
                                 )
                             }
-                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = Color.Black)
                         }
 
                         Row(
@@ -847,20 +951,33 @@ class MainActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
-                                    checked = isStopEachTrackEnabled,
-                                    onCheckedChange = { 
-                                        isStopEachTrackEnabled = it
-                                        bluetoothClient.sendStopEachTrack(it)
-                                    },
-                                    modifier = Modifier.scale(0.7f)
-                                )
-                                Text("一曲ごとに停止", fontSize = 12.sp)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = {
+                                    isRepeatEnabled = !isRepeatEnabled
+                                    bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.repeat),
+                                        contentDescription = "Repeat",
+                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    isShuffleEnabled = !isShuffleEnabled
+                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.shuffle),
+                                        contentDescription = "Shuffle",
+                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
-                            }) { Text("切断") }
+                            }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)) { Text("切断") }
                         }
                     }
                 }
@@ -869,6 +986,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---------------- Server / Local ----------------
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun ServerScreen(
         isBluetoothEnabled: Boolean, 
@@ -889,7 +1007,8 @@ class MainActivity : ComponentActivity() {
         val musicList = remember { getMusicListStatic(context) }
         var selectedTab by remember { mutableStateOf(0) }
         val scope = rememberCoroutineScope()
-        var isStopEachTrackEnabled by remember { mutableStateOf(false) }
+        var isRepeatEnabled by remember { mutableStateOf(false) }
+        var isShuffleEnabled by remember { mutableStateOf(false) }
 
         fun getAlbumArtUri(albumId: Long): Uri {
             val artworkUri = Uri.parse("content://media/external/audio/albumart")
@@ -928,6 +1047,16 @@ class MainActivity : ComponentActivity() {
 
         fun skipNext() {
             val currentIndex = musicList.indexOfFirst { it.uri.toString() == currentSongUri }
+            if (isShuffleEnabled) {
+                val currentSong = musicList.find { it.uri.toString() == currentSongUri }
+                if (currentSong != null) {
+                    val folderSongs = musicList.filter { it.folder == currentSong.folder }
+                    if (folderSongs.isNotEmpty()) {
+                        playSong(folderSongs.random().uri.toString())
+                        return
+                    }
+                }
+            }
             if (currentIndex != -1 && currentIndex < musicList.size - 1) {
                 val nextSong = musicList[currentIndex + 1]
                 playSong(nextSong.uri.toString())
@@ -942,9 +1071,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(isStopEachTrackEnabled) {
+        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, musicList, currentSongUri) {
             MusicService.onTrackEnded = {
-                if (!isStopEachTrackEnabled) {
+                if (isRepeatEnabled) {
+                    currentSongUri?.let { scope.launch { playSong(it) } }
+                } else {
                     scope.launch { skipNext() }
                 }
             }
@@ -987,7 +1118,8 @@ class MainActivity : ComponentActivity() {
                 server.onNext = { scope.launch { skipNext() } }
                 server.onPrevious = { scope.launch { skipPrevious() } }
                 server.onAutoSkipSync = { enabled ->
-                    isStopEachTrackEnabled = enabled
+                    // 以前のSET_STOP_EACHメッセージをリピートに読み替え
+                    isRepeatEnabled = !enabled 
                 }
                 server.onDisconnected = {
                     CoroutineScope(Dispatchers.Main).launch {
@@ -996,6 +1128,16 @@ class MainActivity : ComponentActivity() {
                         context.stopService(stopIntent)
                         onCancel()
                         Toast.makeText(context, "接続が切断されました", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                
+                // 新規追加分
+                server.onReceiveMessage = { message ->
+                    if (message.startsWith("SET_REPEAT:")) {
+                        isRepeatEnabled = message.removePrefix("SET_REPEAT:") == "ON"
+                    }
+                    if (message.startsWith("SET_SHUFFLE:")) {
+                        isShuffleEnabled = message.removePrefix("SET_SHUFFLE:") == "ON"
                     }
                 }
             }
@@ -1017,18 +1159,20 @@ class MainActivity : ComponentActivity() {
 
         Scaffold(
             bottomBar = {
-                NavigationBar {
+                NavigationBar(containerColor = Color.White) {
                     NavigationBarItem(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
-                        icon = { Icon(painterResource(android.R.drawable.ic_media_play), "再生メディア") },
-                        label = { Text("再生メディア") }
+                        icon = { Icon(painterResource(R.drawable.play), "再生メディア", tint = if(selectedTab==0) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                        label = { Text("再生メディア", color = if(selectedTab==0) Color.Black else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
                     )
                     NavigationBarItem(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        icon = { Icon(painterResource(android.R.drawable.ic_menu_agenda), "曲リスト") },
-                        label = { Text("曲リスト") }
+                        icon = { Icon(painterResource(R.drawable.lists), "曲リスト", tint = if(selectedTab==1) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                        label = { Text("曲リスト", color = if(selectedTab==1) Color.Black else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
                     )
                 }
             }
@@ -1041,19 +1185,29 @@ class MainActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         if (!isBluetoothEnabled && onConnectBluetooth != null) {
-                            Button(onClick = onConnectBluetooth, modifier = Modifier.padding(bottom = 16.dp)) {
+                            OutlinedButton(
+                                onClick = onConnectBluetooth,
+                                modifier = Modifier.padding(bottom = 16.dp),
+                                border = BorderStroke(1.dp, Color.Black),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                            ) {
                                 Text("デバイスと通信する")
                             }
                         } else if (isBluetoothEnabled && !isConnected && onStopCommunication != null) {
-                            Button(onClick = {
-                                server?.stopServer()
-                                onStopCommunication()
-                            }, modifier = Modifier.padding(bottom = 16.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    server?.stopServer()
+                                    onStopCommunication()
+                                },
+                                modifier = Modifier.padding(bottom = 16.dp),
+                                border = BorderStroke(1.dp, Color.Black),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                            ) {
                                 Text("通信停止")
                             }
                         }
 
-                        Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード")
+                        Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード", color = Color.Black)
                         Spacer(modifier = Modifier.height(16.dp))
                         Image(
                             painter = rememberAsyncImagePainter(
@@ -1067,7 +1221,7 @@ class MainActivity : ComponentActivity() {
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         playingTitle?.let {
-                            Text("再生中: $it", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("再生中: $it", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             
                             Row(
                                 horizontalArrangement = Arrangement.Center,
@@ -1075,10 +1229,16 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(top = 8.dp)
                             ) {
                                 IconButton(onClick = { skipPrevious() }) {
-                                    Icon(painterResource(android.R.drawable.ic_media_previous), contentDescription = "Skip Previous")
+                                    Icon(
+                                        painter = painterResource(R.drawable.skip_left), 
+                                        contentDescription = "Skip Previous", 
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(48.dp)
+                                    )
                                 }
                                 Spacer(modifier = Modifier.width(24.dp))
-                                Button(
+                                // 再生・一時停止ボタン
+                                OutlinedButton(
                                     onClick = {
                                         if (isPlaying) {
                                             if (isBluetoothEnabled) {
@@ -1095,16 +1255,28 @@ class MainActivity : ComponentActivity() {
                                             }
                                             isPlaying = true
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier.width(90.dp).height(56.dp),
+                                    shape = RoundedCornerShape(percent = 50),
+                                    border = BorderStroke(1.dp, Color.Black),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                    contentPadding = PaddingValues(0.dp)
                                 ) { 
                                     Icon(
-                                        painter = painterResource(if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play),
-                                        contentDescription = "Play/Pause"
+                                        painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
+                                        contentDescription = "Play/Pause",
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(32.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(24.dp))
                                 IconButton(onClick = { skipNext() }) {
-                                    Icon(painterResource(android.R.drawable.ic_media_next), contentDescription = "Skip Next")
+                                    Icon(
+                                        painter = painterResource(R.drawable.skip_right), 
+                                        contentDescription = "Skip Next", 
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(48.dp)
+                                    )
                                 }
                             }
                         }
@@ -1115,7 +1287,7 @@ class MainActivity : ComponentActivity() {
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
                             ) {
-                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp)
+                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
                                 Slider(
                                     value = sliderValue,
                                     onValueChange = { currentPosition = (it * duration).toInt() },
@@ -1128,9 +1300,31 @@ class MainActivity : ComponentActivity() {
                                             context.startService(intent)
                                         }
                                     },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f),
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color.Black, 
+                                        activeTrackColor = Color.Black,
+                                        inactiveTrackColor = Color.LightGray
+                                    ),
+                                    thumb = {
+                                        Surface(
+                                            modifier = Modifier.size(12.dp),
+                                            shape = CircleShape,
+                                            color = Color.Black
+                                        ) {}
+                                    },
+                                    track = { sliderState ->
+                                        SliderDefaults.Track(
+                                            sliderState = sliderState,
+                                            modifier = Modifier.height(2.dp),
+                                            colors = SliderDefaults.colors(
+                                                activeTrackColor = Color.Black,
+                                                inactiveTrackColor = Color.LightGray
+                                            )
+                                        )
+                                    }
                                 )
-                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp)
+                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
                             }
                         }
                         
@@ -1141,23 +1335,40 @@ class MainActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
-                                    checked = isStopEachTrackEnabled,
-                                    onCheckedChange = { 
-                                        isStopEachTrackEnabled = it
-                                        server?.sendMessage("SET_STOP_EACH:${if(it) "ON" else "OFF"}")
-                                    },
-                                    modifier = Modifier.scale(0.7f)
-                                )
-                                Text("一曲ごとに停止", fontSize = 12.sp)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = {
+                                    isRepeatEnabled = !isRepeatEnabled
+                                    server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.repeat),
+                                        contentDescription = "Repeat",
+                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    isShuffleEnabled = !isShuffleEnabled
+                                    server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.shuffle),
+                                        contentDescription = "Shuffle",
+                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
-                            Button(onClick = { 
-                                server?.stopServer()
-                                val stopIntent = Intent(context, MusicService::class.java)
-                                context.stopService(stopIntent)
-                                onCancel() 
-                            }) { Text(if (isBluetoothEnabled) "切断" else "終了") }
+                            OutlinedButton(
+                                onClick = { 
+                                    server?.stopServer()
+                                    val stopIntent = Intent(context, MusicService::class.java)
+                                    context.stopService(stopIntent)
+                                    onCancel() 
+                                },
+                                border = BorderStroke(1.dp, Color.Black),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                            ) { Text(if (isBluetoothEnabled) "切断" else "終了") }
                         }
                     }
                 } else {
@@ -1181,10 +1392,11 @@ class MainActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
                                             contentDescription = null,
-                                            modifier = Modifier.size(24.dp)
+                                            modifier = Modifier.size(24.dp),
+                                            tint = Color.Black
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text(text = folder)
+                                        Text(text = folder, color = Color.Black)
                                     }
                                 }
                             }
@@ -1204,16 +1416,16 @@ class MainActivity : ComponentActivity() {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     if (isCurrent) {
                                                         Icon(
-                                                            painter = painterResource(android.R.drawable.ic_media_play),
+                                                            painter = painterResource(R.drawable.play),
                                                             contentDescription = null,
                                                             modifier = Modifier.size(16.dp),
-                                                            tint = MaterialTheme.colorScheme.primary
+                                                            tint = Color.Black
                                                         )
                                                         Spacer(modifier = Modifier.width(4.dp))
                                                     }
                                                     Text(
                                                         text = song.title,
-                                                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                                        color = if (isCurrent) Color.Black else Color.DarkGray
                                                     )
                                                 }
                                                 Text(
