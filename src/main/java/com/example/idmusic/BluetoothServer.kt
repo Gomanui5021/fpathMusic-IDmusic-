@@ -369,13 +369,18 @@ class BluetoothServer(private val context: Context) : Thread() {
                     var outputName = "スピーカー"
                     var hasBluetooth = false
                     
+                    // 音声出力先の判定
                     val btDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+                    val usbDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+                    val wiredDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES }
+
                     if (btDeviceInfo != null) {
                         outputName = btDeviceInfo.productName?.toString() ?: "Bluetoothイヤホン"
                         hasBluetooth = true
-                    } else {
-                        val wired = devices.find { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES }
-                        if (wired != null) outputName = "有線イヤホン"
+                    } else if (usbDeviceInfo != null) {
+                        outputName = usbDeviceInfo.productName?.toString()?.ifEmpty { "USBオーディオ" } ?: "USBオーディオ"
+                    } else if (wiredDeviceInfo != null) {
+                        outputName = "有線イヤホン"
                     }
                     
                     if (outputName != lastSentOutput) {
@@ -405,11 +410,9 @@ class BluetoothServer(private val context: Context) : Thread() {
         val a2dp = bluetoothA2dp ?: return "取得中..."
         
         try {
-            // 全てのAPIレベルで安全にリフレクションを使用してコーデック情報を取得
-            // BluetoothCodecStatus などのクラス参照を避けるため全てのリフレクション処理を文字列ベースで行う
             val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", android.bluetooth.BluetoothDevice::class.java)
-            val activeDeviceMethod = a2dp.javaClass.getMethod("getActiveDevice")
-            val activeDevice = activeDeviceMethod.invoke(a2dp) as? android.bluetooth.BluetoothDevice
+            val getActiveDeviceMethod = a2dp.javaClass.getMethod("getActiveDevice")
+            val activeDevice = getActiveDeviceMethod.invoke(a2dp) as? android.bluetooth.BluetoothDevice
             
             if (activeDevice != null) {
                 val codecStatus = getCodecStatusMethod.invoke(a2dp, activeDevice)
@@ -423,9 +426,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            // Log.e("BT", "Codec Reflection Error", e)
-        }
+        } catch (e: Exception) {}
         return "不明"
     }
 
@@ -439,8 +440,7 @@ class BluetoothServer(private val context: Context) : Thread() {
             5 -> "aptX Adaptive"
             6 -> "Opus"
             7 -> "LC3 (LE Audio)"
-            // 一部の端末やQualcomm系で 8 以降に aptX TWS+ などが入る場合があります
-            else -> "Unknown ($type)"
+            else -> "Codec($type)"
         }
     }
 }
