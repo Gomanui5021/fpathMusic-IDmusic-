@@ -660,7 +660,7 @@ class MainActivity : ComponentActivity() {
             val expandedState = remember { mutableStateMapOf<String, Boolean>() }
             
             // 共通の再生コントロール（メニューボックス）
-            val playbackControlBox = @Composable {
+            val playbackControlBox = @Composable { showSettings: Boolean ->
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -852,33 +852,38 @@ class MainActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = {
-                                    isRepeatEnabled = !isRepeatEnabled
-                                    bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.repeat),
-                                        contentDescription = "Repeat",
-                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                            if (showSettings) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(onClick = {
+                                        isRepeatEnabled = !isRepeatEnabled
+                                        bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.repeat),
+                                            contentDescription = "Repeat",
+                                            tint = if (isRepeatEnabled) Color.Black else Color.Gray,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    IconButton(onClick = {
+                                        isShuffleEnabled = !isShuffleEnabled
+                                        bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.shuffle),
+                                            contentDescription = "Shuffle",
+                                            tint = if (isShuffleEnabled) Color.Black else Color.Gray,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
-                                IconButton(onClick = {
-                                    isShuffleEnabled = !isShuffleEnabled
-                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.shuffle),
-                                        contentDescription = "Shuffle",
-                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
+                            } else {
+                                // 設定非表示時は空白を埋めるためのダミー
+                                Spacer(modifier = Modifier.width(24.dp))
                             }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
-                            }, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)) { Text("切断") }
+                            }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)) { Text("切断") }
                         }
                     }
                 }
@@ -936,7 +941,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else if (selectedTab == 0) {
-                    // 再生メディアタブ (サーバー側と同じスタイル：大きなアルバムアート中心)
+                    // 再生メディアタブ
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.Center,
@@ -1221,7 +1226,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        playbackControlBox()
+                        playbackControlBox(false) // 曲リストタブではリピート・シャッフルを非表示
                     }
                 } else {
                     // 再生ステータスタブ
