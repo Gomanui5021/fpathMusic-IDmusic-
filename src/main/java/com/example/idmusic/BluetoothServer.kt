@@ -27,6 +27,9 @@ import android.util.Base64
 import java.io.ByteArrayOutputStream
 import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.media.AudioDeviceInfo
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothProfile
 
 class BluetoothServer(private val context: Context) : Thread() {
 
@@ -49,16 +52,34 @@ class BluetoothServer(private val context: Context) : Thread() {
     private val sendExecutor = Executors.newSingleThreadExecutor()
     private val sentAlbumArts = Collections.synchronizedSet(mutableSetOf<Long>())
 
+    private var bluetoothA2dp: BluetoothA2dp? = null
+    private val profileListener = object : BluetoothProfile.ServiceListener {
+        override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+            if (profile == BluetoothProfile.A2DP) {
+                bluetoothA2dp = proxy as BluetoothA2dp
+            }
+        }
+        override fun onServiceDisconnected(profile: Int) {
+            if (profile == BluetoothProfile.A2DP) {
+                bluetoothA2dp = null
+            }
+        }
+    }
+
     var onConnected: (() -> Unit)? = null
     var onPlay: ((String) -> Unit)? = null
     var onNext: (() -> Unit)? = null
     var onPrevious: (() -> Unit)? = null
-    var onAutoSkipSync: ((Boolean) -> Unit)? = null // 設定同期用
+    var onAutoSkipSync: ((Boolean) -> Unit)? = null
     var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
     var onReceiveMessage: ((String) -> Unit)? = null
 
     private var musicListToSend: List<MusicItem> = emptyList()
+
+    init {
+        adapter?.getProfileProxy(context, profileListener, BluetoothProfile.A2DP)
+    }
 
     fun setMusicList(list: List<MusicItem>) {
         musicListToSend = list
@@ -120,10 +141,7 @@ class BluetoothServer(private val context: Context) : Thread() {
 
             onConnected?.invoke()
             sentAlbumArts.clear()
-            
-            // 接続時にサーバー側の音量を送信
             sendCurrentVolume()
-            
             sendMusicList(musicListToSend)
             listenIncoming()
             startStatusSender()
@@ -175,8 +193,6 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
                 context.startService(intent)
                 onPlay?.invoke(path)
-                
-                // 再生開始時にアルバムアートを送信（未送信の場合）
                 musicListToSend.find { it.uri.toString() == path }?.let {
                     sendAlbumArt(it.albumId, it.uri.toString())
                 }
@@ -254,7 +270,6 @@ class BluetoothServer(private val context: Context) : Thread() {
                 }
 
                 bitmap?.let {
-                    // 画像を圧縮 (300x300程度にリサイズ)
                     val size = 300
                     val scaled = if (it.width > size || it.height > size) {
                         val scale = size.toFloat() / Math.max(it.width, it.height)
@@ -262,7 +277,6 @@ class BluetoothServer(private val context: Context) : Thread() {
                     } else it
                     
                     val out = ByteArrayOutputStream()
-                    // WebP または JPEG で圧縮 (容量を減らす)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, 75, out)
                     } else {
@@ -299,6 +313,7 @@ class BluetoothServer(private val context: Context) : Thread() {
         thread {
             synchronized(this) {
                 try {
+                    adapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
                     serverSocket?.close()
                     socket?.close()
                     reader?.close()
@@ -308,6 +323,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                 socket = null
                 reader = null
                 writer = null
+                bluetoothA2dp = null
             }
             try { sendExecutor.shutdownNow() } catch(_: Exception) {}
         }
@@ -331,9 +347,11 @@ class BluetoothServer(private val context: Context) : Thread() {
     private fun startStatusSender() {
         thread {
             var lastSentVol = -1
+            var lastSentOutput = ""
+            var lastSentCodec = ""
+            
             while (isRunning) {
                 try {
-                    // 進捗送信
                     val service = MusicService.instance
                     if (service != null && service.isPlaying()) {
                         val pos = service.getCurrentPosition()
@@ -341,17 +359,88 @@ class BluetoothServer(private val context: Context) : Thread() {
                         if (dur > 0) sendProgress(pos, dur)
                     }
 
-                    // 音量同期
                     val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                     if (currentVol != lastSentVol) {
                         sendCurrentVolume()
                         lastSentVol = currentVol
                     }
+                    
+                    val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                    var outputName = "スピーカー"
+                    var hasBluetooth = false
+                    
+                    val btDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+                    if (btDeviceInfo != null) {
+                        outputName = btDeviceInfo.productName?.toString() ?: "Bluetoothイヤホン"
+                        hasBluetooth = true
+                    } else {
+                        val wired = devices.find { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES }
+                        if (wired != null) outputName = "有線イヤホン"
+                    }
+                    
+                    if (outputName != lastSentOutput) {
+                        sendMessage("OUTPUT_DEVICE:$outputName")
+                        lastSentOutput = outputName
+                    }
+
+                    var codecName = "NO connect"
+                    if (hasBluetooth) {
+                        codecName = getBluetoothCodecName()
+                    }
+
+                    if (codecName != lastSentCodec) {
+                        sendMessage("AUDIO_CODEC:$codecName")
+                        lastSentCodec = codecName
+                    }
+
                 } catch (e: Exception) {
                     if (isRunning) Log.e("BT", "Status Sender Error", e)
                 }
                 Thread.sleep(500)
             }
+        }
+    }
+
+    private fun getBluetoothCodecName(): String {
+        val a2dp = bluetoothA2dp ?: return "取得中..."
+        
+        try {
+            // 全てのAPIレベルで安全にリフレクションを使用してコーデック情報を取得
+            // BluetoothCodecStatus などのクラス参照を避けるため全てのリフレクション処理を文字列ベースで行う
+            val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", android.bluetooth.BluetoothDevice::class.java)
+            val activeDeviceMethod = a2dp.javaClass.getMethod("getActiveDevice")
+            val activeDevice = activeDeviceMethod.invoke(a2dp) as? android.bluetooth.BluetoothDevice
+            
+            if (activeDevice != null) {
+                val codecStatus = getCodecStatusMethod.invoke(a2dp, activeDevice)
+                if (codecStatus != null) {
+                    val getCodecConfigMethod = codecStatus.javaClass.getMethod("getCodecConfig")
+                    val codecConfig = getCodecConfigMethod.invoke(codecStatus)
+                    if (codecConfig != null) {
+                        val getCodecTypeMethod = codecConfig.javaClass.getMethod("getCodecType")
+                        val type = getCodecTypeMethod.invoke(codecConfig) as Int
+                        return mapCodecTypeToString(type)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Log.e("BT", "Codec Reflection Error", e)
+        }
+        return "不明"
+    }
+
+    private fun mapCodecTypeToString(type: Int): String {
+        return when (type) {
+            0 -> "SBC"
+            1 -> "AAC"
+            2 -> "aptX"
+            3 -> "aptX HD"
+            4 -> "LDAC"
+            5 -> "aptX Adaptive"
+            6 -> "Opus"
+            7 -> "LC3 (LE Audio)"
+            // 一部の端末やQualcomm系で 8 以降に aptX TWS+ などが入る場合があります
+            else -> "Unknown ($type)"
         }
     }
 }

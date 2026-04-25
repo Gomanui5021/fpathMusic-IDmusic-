@@ -28,6 +28,8 @@ import android.util.Size
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
 import kotlin.concurrent.thread
+import android.media.MediaFormat
+import android.media.MediaExtractor
 
 class MusicService : Service() {
 
@@ -64,6 +66,7 @@ class MusicService : Service() {
     private var currentAlbumId: Long = -1L
     private var currentUri: String? = null
     private var noImageBitmap: Bitmap? = null
+    private var currentAudioFormat: String = "未取得"
 
     private var mediaSession: MediaSessionCompat? = null
 
@@ -89,6 +92,10 @@ class MusicService : Service() {
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val timeoutRunnable = object : Runnable {
         override fun run() {
+            // 再生中は「操作中」とみなしてタイマーを常にリセットする
+            if (isPlayingLocal || (mediaPlayer?.isPlaying == true)) {
+                updateLastInteractionTime()
+            }
             checkTimeout()
             timeoutHandler.postDelayed(this, 30000) // 30秒ごとにチェック
         }
@@ -103,15 +110,14 @@ class MusicService : Service() {
     private fun checkTimeout() {
         val currentTime = System.currentTimeMillis()
         val tenMinutes = 10 * 60 * 1000
+        // 実際に再生中かどうかを判定
+        val isActuallyPlaying = isPlayingLocal || (mediaPlayer?.isPlaying == true)
+        
         // バックグラウンド かつ 非再生 かつ 10分間無操作 の場合に切断
-        if (!isAppInForeground && !isPlayingLocal && (currentTime - lastInteractionTime >= tenMinutes)) {
-            Log.d("MusicService", "10分間無操作（バックグラウンド）のため、自動切断します")
-            
-            // Bluetoothの切断
+        if (!isAppInForeground && !isActuallyPlaying && (currentTime - lastInteractionTime >= tenMinutes)) {
+            Log.d("MusicService", "10分間無操作かつ非再生（バックグラウンド）のため、自動切断します")
             BluetoothClient.instance?.disconnect()
             BluetoothServer.instance?.stopServer()
-            
-            // サービスの停止
             stopForeground(true)
             stopPlayer()
             stopSelf()
@@ -127,7 +133,6 @@ class MusicService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         
-        // 操作があった場合はタイマーをリセット (状態更新とフォアグラウンド通知以外)
         if (action != null && action != ACTION_UPDATE_STATE && action != ACTION_SET_FOREGROUND) {
             updateLastInteractionTime()
         }
@@ -276,6 +281,13 @@ class MusicService : Service() {
             stopPlayer()
             uriString?.let {
                 val uri = Uri.parse(it)
+                
+                // オーディオフォーマット情報の取得
+                thread {
+                    currentAudioFormat = getAudioFormatInfo(uri)
+                    sendControlCommand("AUDIO_FORMAT:$currentAudioFormat")
+                }
+
                 contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
                     mediaPlayer = MediaPlayer().apply {
                         setDataSource(fd.fileDescriptor)
@@ -286,9 +298,7 @@ class MusicService : Service() {
                                 isPlayingLocal = false
                                 updatePlaybackState(false, currentDuration)
                                 updateNotification(false)
-                                // クライアント側に停止を同期
                                 sendControlCommand("STATE:PAUSED")
-                                // UI側（ServerScreenなど）に曲終了を通知
                                 onTrackEnded?.invoke()
                             }, 500)
                         }
@@ -302,6 +312,36 @@ class MusicService : Service() {
             }
         } catch (e: Exception) {
             Log.e("MusicService", "再生エラー", e)
+        }
+    }
+
+    private fun getAudioFormatInfo(uri: Uri): String {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(this, uri, null)
+            val format = extractor.getTrackFormat(0)
+            val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 0
+            
+            // ビット深度の取得 (FLACなどの場合)
+            var bitDepth = 16 // デフォルト
+            if (format.containsKey("bits-per-sample")) {
+                bitDepth = format.getInteger("bits-per-sample")
+            } else if (format.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                val encoding = format.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                bitDepth = when (encoding) {
+                    android.media.AudioFormat.ENCODING_PCM_8BIT -> 8
+                    android.media.AudioFormat.ENCODING_PCM_16BIT -> 16
+                    android.media.AudioFormat.ENCODING_PCM_FLOAT -> 32
+                    else -> 16
+                }
+            }
+            
+            val srText = if (sampleRate >= 1000) "${sampleRate / 1000}kHz" else "${sampleRate}Hz"
+            return "$srText/${bitDepth}bit"
+        } catch (e: Exception) {
+            return "不明"
+        } finally {
+            extractor.release()
         }
     }
 
@@ -370,7 +410,6 @@ class MusicService : Service() {
         val notification = createNotification(currentTitle ?: "不明", currentDevice ?: "接続中", isPlaying, currentBitmap)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // startForeground for API 33+
                 startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
             } else {
                 startForeground(1, notification)
@@ -428,6 +467,8 @@ class MusicService : Service() {
         try { mediaPlayer?.seekTo(position) } catch (e: Exception) { Log.e("MusicService", "Seek Error", e) }
     }
 
+    fun getCurrentAudioFormat(): String = currentAudioFormat
+
     override fun onCreate() {
         super.onCreate()
         noImageBitmap = BitmapFactory.decodeResource(resources, R.drawable.no_image)
@@ -446,8 +487,6 @@ class MusicService : Service() {
         }
         instance = this
         updatePlaybackState(false, 0)
-        
-        // タイムアウト監視を開始
         timeoutHandler.post(timeoutRunnable)
     }
 

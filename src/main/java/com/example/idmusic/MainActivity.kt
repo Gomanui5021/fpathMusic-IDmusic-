@@ -51,6 +51,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import com.example.idmusic.ui.theme.IDmusicTheme
 import androidx.compose.ui.graphics.ColorFilter
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 
 class MainActivity : ComponentActivity() {
 
@@ -362,6 +364,10 @@ class MainActivity : ComponentActivity() {
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
         var isRepeatEnabled by remember { mutableStateOf(false) }
         var isShuffleEnabled by remember { mutableStateOf(false) }
+        var selectedTab by remember { mutableStateOf(0) }
+        var serverOutputDevice by remember { mutableStateOf("取得中...") }
+        var serverAudioFormat by remember { mutableStateOf("未取得") }
+        var serverAudioCodec by remember { mutableStateOf("取得中...") }
         
         // 音量同期用
         var serverVolume by remember { mutableStateOf(0) }
@@ -411,17 +417,15 @@ class MainActivity : ComponentActivity() {
         }
 
         fun skipNext() {
-            val currentIndex = musicItems.indexOfFirst { it.uri.toString() == currentSongUri }
-            if (isShuffleEnabled) {
-                val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
-                if (currentSong != null) {
-                    val folderSongs = musicItems.filter { it.folder == currentSong.folder }
-                    if (folderSongs.isNotEmpty()) {
-                        playSong(folderSongs.random())
-                        return
-                    }
+            val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
+            if (isShuffleEnabled && currentSong != null) {
+                val folderSongs = musicItems.filter { it.folder == currentSong.folder }
+                if (folderSongs.isNotEmpty()) {
+                    playSong(folderSongs.random())
+                    return
                 }
             }
+            val currentIndex = musicItems.indexOfFirst { it.uri.toString() == currentSongUri }
             if (currentIndex != -1 && currentIndex < musicItems.size - 1) {
                 playSong(musicItems[currentIndex + 1])
             }
@@ -539,6 +543,15 @@ class MainActivity : ComponentActivity() {
                         message.startsWith("SET_SHUFFLE:") -> {
                             isShuffleEnabled = message.removePrefix("SET_SHUFFLE:") == "ON"
                         }
+                        message.startsWith("OUTPUT_DEVICE:") -> {
+                            serverOutputDevice = message.removePrefix("OUTPUT_DEVICE:")
+                        }
+                        message.startsWith("AUDIO_FORMAT:") -> {
+                            serverAudioFormat = message.removePrefix("AUDIO_FORMAT:")
+                        }
+                        message.startsWith("AUDIO_CODEC:") -> {
+                            serverAudioCodec = message.removePrefix("AUDIO_CODEC:")
+                        }
                         message == "NEXT" -> skipNext()
                         message == "PREVIOUS" -> skipPrevious()
                     }
@@ -615,151 +628,39 @@ class MainActivity : ComponentActivity() {
             return "%02d:%02d".format(min, sec)
         }
 
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-        ) {
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                if (!isConnected) {
-                    OutlinedButton(
-                        onClick = { onDisconnect() },
-                        border = BorderStroke(1.dp, Color.Black),
-                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
-                    ) {
-                        Text("← 戻る")
+        Scaffold(
+            bottomBar = {
+                if (isConnected) {
+                    NavigationBar(containerColor = Color.White) {
+                        NavigationBarItem(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            icon = { Icon(painterResource(R.drawable.play), "再生メディア", tint = if(selectedTab==0) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                            label = { Text("再生メディア", color = if(selectedTab==0) Color.Black else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            icon = { Icon(painterResource(R.drawable.lists), "曲リスト", tint = if(selectedTab==1) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                            label = { Text("曲リスト", color = if(selectedTab==1) Color.Black else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 2,
+                            onClick = { selectedTab = 2 },
+                            icon = { Icon(painterResource(android.R.drawable.ic_menu_info_details), "再生ステータス", tint = if(selectedTab==2) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                            label = { Text("再生ステータス", color = if(selectedTab==2) Color.Black else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        )
                     }
                 }
             }
-
+        ) { padding ->
             val expandedState = remember { mutableStateMapOf<String, Boolean>() }
-
-            if (!isConnected) {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(deviceList) { device ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    connectingDevice = device
-                                    connectedDeviceName = device.name ?: "不明"
-                                    Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
-                                    
-                                    val intent = Intent(context, MusicService::class.java).apply {
-                                        action = MusicService.ACTION_UPDATE_STATE
-                                        putExtra("IS_PLAYING", false)
-                                        putExtra("TITLE", "接続中...")
-                                        putExtra("DEVICE", device.name ?: "不明")
-                                    }
-                                    ContextCompat.startForegroundService(context, intent)
-
-                                    scope.launch(Dispatchers.IO) {
-                                        bluetoothClient.connect(device)
-                                    }
-                                }
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(text = device.name ?: "不明", modifier = Modifier.weight(1f))
-                            if (connectingDevice == device) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Black)
-                            }
-                        }
-                    }
-                }
-            } else {
-                val grouped = musicItems.groupBy { it.folder }
-
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    grouped.forEach { (folder, songs) ->
-                        val isExpanded = expandedState[folder] ?: false
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .border(width = 1.dp, Color.Black)
-                                    .height(56.dp)
-                                    .clickable { expandedState[folder] = !isExpanded }
-                                    .padding(horizontal = 8.dp),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp),
-                                        tint = Color.Black
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(text = folder, color = Color.Black)
-                                }
-                            }
-                        }
-                        if (isExpanded) {
-                            items(songs) { song ->
-                                val isCurrent = song.uri.toString() == currentSongUri
-                                
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
-                                        .clickable { playSong(song) }
-                                        .padding(12.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                if (isCurrent) {
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.play),
-                                                        contentDescription = null,
-                                                        modifier = Modifier.size(16.dp),
-                                                        tint = Color.Black
-                                                    )
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                }
-                                                Text(
-                                                    text = song.title,
-                                                    color = if (isCurrent) Color.Black else Color.DarkGray
-                                                )
-                                            }
-                                            Text(
-                                                text = "[${song.storage}] ${song.path}",
-                                                fontSize = 12.sp,
-                                                color = Color.Gray.copy(alpha = 0.7f),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        
-                                        // artUpdateCounterをKeyに入れることで、画像受信時に再描画を強制する
-                                        key(song.albumId, artUpdateCounter) {
-                                            val artFile = File(cacheFolder, "${song.albumId}.webp")
-                                            Image(
-                                                painter = rememberAsyncImagePainter(
-                                                    model = if (artFile.exists()) artFile else R.drawable.no_image,
-                                                    error = painterResource(R.drawable.no_image),
-                                                    placeholder = painterResource(R.drawable.no_image)
-                                                ),
-                                                contentDescription = "Song Album Art",
-                                                modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
-                                                contentScale = ContentScale.Crop
-                                            )
-                                        }
-                                    }
-                                }
-                                HorizontalDivider(thickness = 2.dp, color = Color.Gray)
-                            }
-                        }
-                    }
-                }
-
+            
+            // 共通の再生コントロール（メニューボックス）
+            val playbackControlBox = @Composable {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -894,7 +795,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             
-                            Spacer(modifier = Modifier.width(16.dp)) // ボタンとスライダーの間に間隔を追加
+                            Spacer(modifier = Modifier.width(16.dp))
 
                             Slider(
                                 value = serverVolume.toFloat(),
@@ -928,7 +829,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                             
-                            Spacer(modifier = Modifier.width(16.dp)) // ボタンとスライダーの間に間隔を追加
+                            Spacer(modifier = Modifier.width(16.dp))
 
                             IconButton(onClick = { 
                                 if (serverVolume < serverMaxVolume) {
@@ -977,8 +878,373 @@ class MainActivity : ComponentActivity() {
                             }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
-                            }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)) { Text("切断") }
+                            }, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.Black)) { Text("切断") }
                         }
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                if (!isConnected) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        OutlinedButton(
+                            onClick = { onDisconnect() },
+                            border = BorderStroke(1.dp, Color.Black),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                        ) {
+                            Text("← 戻る")
+                        }
+                    }
+
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(deviceList) { device ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        connectingDevice = device
+                                        connectedDeviceName = device.name ?: "不明"
+                                        Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
+                                        
+                                        val intent = Intent(context, MusicService::class.java).apply {
+                                            action = MusicService.ACTION_UPDATE_STATE
+                                            putExtra("IS_PLAYING", false)
+                                            putExtra("TITLE", "接続中...")
+                                            putExtra("DEVICE", device.name ?: "不明")
+                                        }
+                                        ContextCompat.startForegroundService(context, intent)
+
+                                        scope.launch(Dispatchers.IO) {
+                                            bluetoothClient.connect(device)
+                                        }
+                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = device.name ?: "不明", modifier = Modifier.weight(1f))
+                                if (connectingDevice == device) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Black)
+                                }
+                            }
+                        }
+                    }
+                } else if (selectedTab == 0) {
+                    // 再生メディアタブ (サーバー側と同じスタイル：大きなアルバムアート中心)
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("接続デバイス: $connectedDeviceName", color = Color.Black)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        key(currentSongUri, artUpdateCounter) {
+                            val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
+                            val artFile = currentSong?.let { File(cacheFolder, "${it.albumId}.webp") }
+                            Image(
+                                painter = rememberAsyncImagePainter(
+                                    model = if (artFile?.exists() == true) artFile else R.drawable.no_image,
+                                    error = painterResource(R.drawable.no_image),
+                                    placeholder = painterResource(R.drawable.no_image)
+                                ),
+                                contentDescription = "Album Art",
+                                modifier = Modifier.size(250.dp).padding(16.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        currentSongTitle?.let { title ->
+                            Text("再生中: $title", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 8.dp)
+                            ) {
+                                IconButton(onClick = { skipPrevious() }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.skip_left), 
+                                        contentDescription = "Skip Previous", 
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(24.dp))
+                                // 再生・一時停止ボタン
+                                OutlinedButton(
+                                    onClick = {
+                                        if (isPlaying) {
+                                            bluetoothClient.sendPause()
+                                            isPlaying = false
+                                        } else {
+                                            bluetoothClient.sendResume()
+                                            isPlaying = true
+                                        }
+                                        val intent = Intent(context, MusicService::class.java).apply {
+                                            action = MusicService.ACTION_UPDATE_STATE
+                                            putExtra("IS_PLAYING", isPlaying)
+                                            putExtra("TITLE", currentSongTitle)
+                                            putExtra("DEVICE", connectedDeviceName)
+                                            putExtra("DURATION", duration)
+                                        }
+                                        context.startService(intent)
+                                    },
+                                    modifier = Modifier.width(90.dp).height(56.dp),
+                                    shape = RoundedCornerShape(percent = 50),
+                                    border = BorderStroke(1.dp, Color.Black),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) { 
+                                    Icon(
+                                        painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
+                                        contentDescription = "Play/Pause",
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(24.dp))
+                                IconButton(onClick = { skipNext() }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.skip_right), 
+                                        contentDescription = "Skip Next", 
+                                        tint = Color.Black,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (duration > 0) {
+                            val sliderValue = currentPosition.toFloat() / duration.toFloat()
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
+                            ) {
+                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                Slider(
+                                    value = sliderValue,
+                                    onValueChange = { currentPosition = (it * duration).toInt() },
+                                    onValueChangeFinished = { bluetoothClient.sendSeek(currentPosition) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color.Black, 
+                                        activeTrackColor = Color.Black,
+                                        inactiveTrackColor = Color.LightGray
+                                    ),
+                                    thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = Color.Black) {} },
+                                    track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = Color.Black, inactiveTrackColor = Color.LightGray)) }
+                                )
+                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                            }
+                        }
+                        
+                        // サーバー音量操作
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                        ) {
+                            IconButton(onClick = { 
+                                if (serverVolume > 0) {
+                                    serverVolume--
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                }
+                            }, modifier = Modifier.size(45.dp)) {
+                                Icon(
+                                    painter = painterResource(R.drawable.volume_down),
+                                    contentDescription = "Volume Down", 
+                                    modifier = Modifier.fillMaxSize(),
+                                    tint = Color.Black
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Slider(
+                                value = serverVolume.toFloat(),
+                                onValueChange = { 
+                                    serverVolume = it.toInt()
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                },
+                                valueRange = 0f..serverMaxVolume.toFloat(),
+                                modifier = Modifier.weight(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.Black, 
+                                    activeTrackColor = Color.Black,
+                                    inactiveTrackColor = Color.LightGray
+                                ),
+                                thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = Color.Black) {} },
+                                track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = Color.Black, inactiveTrackColor = Color.LightGray)) }
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            IconButton(onClick = { 
+                                if (serverVolume < serverMaxVolume) {
+                                    serverVolume++
+                                    bluetoothClient.sendVolumeSet(serverVolume)
+                                }
+                            }, modifier = Modifier.size(45.dp)) {
+                                Icon(
+                                    painter = painterResource(R.drawable.volume_up),
+                                    contentDescription = "Volume Up", 
+                                    modifier = Modifier.fillMaxSize(),
+                                    tint = Color.Black
+                                )
+                            }
+                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = Color.Black)
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = {
+                                    isRepeatEnabled = !isRepeatEnabled
+                                    bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.repeat),
+                                        contentDescription = "Repeat",
+                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    isShuffleEnabled = !isShuffleEnabled
+                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.shuffle),
+                                        contentDescription = "Shuffle",
+                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { 
+                                    bluetoothClient.sendDisconnect()
+                                },
+                                border = BorderStroke(1.dp, Color.Black),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                            ) { Text("切断") }
+                        }
+                    }
+                } else if (selectedTab == 1) {
+                    // 曲リストタブ
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        val grouped = musicItems.groupBy { it.folder }
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            grouped.forEach { (folder, songs) ->
+                                val isExpanded = expandedState[folder] ?: false
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .border(width = 1.dp, Color.Black)
+                                            .height(56.dp)
+                                            .clickable { expandedState[folder] = !isExpanded }
+                                            .padding(horizontal = 8.dp),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(24.dp),
+                                                tint = Color.Black
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(text = folder, color = Color.Black)
+                                        }
+                                    }
+                                }
+                                if (isExpanded) {
+                                    items(songs) { song ->
+                                        val isCurrent = song.uri.toString() == currentSongUri
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+                                                .clickable { playSong(song) }
+                                                .padding(12.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        if (isCurrent) {
+                                                            Icon(
+                                                                painter = painterResource(R.drawable.play),
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(16.dp),
+                                                                tint = Color.Black
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                        }
+                                                        Text(text = song.title, color = if (isCurrent) Color.Black else Color.DarkGray)
+                                                    }
+                                                    Text(
+                                                        text = "[${song.storage}] ${song.path}",
+                                                        fontSize = 12.sp,
+                                                        color = Color.Gray.copy(alpha = 0.7f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                key(song.albumId, artUpdateCounter) {
+                                                    val artFile = File(cacheFolder, "${song.albumId}.webp")
+                                                    Image(
+                                                        painter = rememberAsyncImagePainter(
+                                                            model = if (artFile.exists()) artFile else R.drawable.no_image,
+                                                            error = painterResource(R.drawable.no_image),
+                                                            placeholder = painterResource(R.drawable.no_image)
+                                                        ),
+                                                        contentDescription = "Song Album Art",
+                                                        modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        HorizontalDivider(thickness = 2.dp, color = Color.Gray)
+                                    }
+                                }
+                            }
+                        }
+                        playbackControlBox()
+                    }
+                } else {
+                    // 再生ステータスタブ
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(text = "サーバー側の音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = serverOutputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+                        
+                        Spacer(modifier = Modifier.height(32.dp))
+                        
+                        Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = serverAudioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+                        
+                        Spacer(modifier = Modifier.height(32.dp))
+                        
+                        Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = serverAudioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
                     }
                 }
             }
@@ -1046,7 +1312,6 @@ class MainActivity : ComponentActivity() {
         }
 
         fun skipNext() {
-            val currentIndex = musicList.indexOfFirst { it.uri.toString() == currentSongUri }
             if (isShuffleEnabled) {
                 val currentSong = musicList.find { it.uri.toString() == currentSongUri }
                 if (currentSong != null) {
@@ -1057,6 +1322,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            val currentIndex = musicList.indexOfFirst { it.uri.toString() == currentSongUri }
             if (currentIndex != -1 && currentIndex < musicList.size - 1) {
                 val nextSong = musicList[currentIndex + 1]
                 playSong(nextSong.uri.toString())
@@ -1118,7 +1384,6 @@ class MainActivity : ComponentActivity() {
                 server.onNext = { scope.launch { skipNext() } }
                 server.onPrevious = { scope.launch { skipPrevious() } }
                 server.onAutoSkipSync = { enabled ->
-                    // 以前のSET_STOP_EACHメッセージをリピートに読み替え
                     isRepeatEnabled = !enabled 
                 }
                 server.onDisconnected = {
@@ -1131,7 +1396,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
-                // 新規追加分
                 server.onReceiveMessage = { message ->
                     if (message.startsWith("SET_REPEAT:")) {
                         isRepeatEnabled = message.removePrefix("SET_REPEAT:") == "ON"
