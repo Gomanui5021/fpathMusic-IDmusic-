@@ -24,12 +24,17 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.content.ContentUris
-import android.util.Size
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
 import kotlin.concurrent.thread
 import android.media.MediaFormat
 import android.media.MediaExtractor
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.AudioDeviceCallback
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothProfile
 
 class MusicService : Service() {
 
@@ -67,8 +72,10 @@ class MusicService : Service() {
     private var currentUri: String? = null
     private var noImageBitmap: Bitmap? = null
     private var currentAudioFormat: String = "未取得"
+    private var currentAudioCodec: String = "不明"
 
     private var mediaSession: MediaSessionCompat? = null
+    private var bluetoothA2dp: BluetoothA2dp? = null
 
     // メタデータ更新用のキャッシュ
     private var lastMetadataTitle: String? = null
@@ -99,6 +106,35 @@ class MusicService : Service() {
             checkTimeout()
             timeoutHandler.postDelayed(this, 30000) // 30秒ごとにチェック
         }
+    }
+
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            notifyStatusChange()
+        }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+            notifyStatusChange()
+        }
+    }
+
+    private val bluetoothProfileListener = object : BluetoothProfile.ServiceListener {
+        override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+            if (profile == BluetoothProfile.A2DP) {
+                bluetoothA2dp = proxy as BluetoothA2dp
+                notifyStatusChange()
+            }
+        }
+        override fun onServiceDisconnected(profile: Int) {
+            if (profile == BluetoothProfile.A2DP) {
+                bluetoothA2dp = null
+                notifyStatusChange()
+            }
+        }
+    }
+
+    private fun notifyStatusChange() {
+        sendControlCommand("OUTPUT_DEVICE:${getCurrentOutputDevice()}")
+        sendControlCommand("AUDIO_CODEC:${getCurrentAudioCodec()}")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -286,6 +322,7 @@ class MusicService : Service() {
                 thread {
                     currentAudioFormat = getAudioFormatInfo(uri)
                     sendControlCommand("AUDIO_FORMAT:$currentAudioFormat")
+                    sendControlCommand("AUDIO_CODEC:${getCurrentAudioCodec()}")
                 }
 
                 contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
@@ -320,6 +357,10 @@ class MusicService : Service() {
         try {
             extractor.setDataSource(this, uri, null)
             val format = extractor.getTrackFormat(0)
+            
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: "不明"
+            currentAudioCodec = mime.substringAfterLast("/").uppercase()
+
             val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 0
             
             // ビット深度の取得 (FLACなどの場合)
@@ -339,6 +380,7 @@ class MusicService : Service() {
             val srText = if (sampleRate >= 1000) "${sampleRate / 1000}kHz" else "${sampleRate}Hz"
             return "$srText/${bitDepth}bit"
         } catch (e: Exception) {
+            currentAudioCodec = "不明"
             return "不明"
         } finally {
             extractor.release()
@@ -468,6 +510,86 @@ class MusicService : Service() {
     }
 
     fun getCurrentAudioFormat(): String = currentAudioFormat
+    
+    private fun mapCodecTypeToString(type: Int): String {
+        return when (type) {
+            0 -> "SBC"
+            1 -> "AAC"
+            2 -> "aptX"
+            3 -> "aptX HD"
+            4 -> "LDAC"
+            5 -> "aptX Adaptive"
+            6 -> "Opus"
+            7 -> "LC3 (LE Audio)"
+            // 一部の端末やQualcomm系で 8 以降に aptX TWS+ などが入る場合があります
+            else -> "Unknown ($type)"
+        }
+    }
+
+    fun getCurrentAudioCodec(): String {
+        if (!isExternalOutputConnected()) {
+            return "No connect"
+        }
+        
+        // Bluetooth A2DPコーデック情報の取得を試みる
+        bluetoothA2dp?.let { a2dp ->
+            try {
+                val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", android.bluetooth.BluetoothDevice::class.java)
+                val getActiveDeviceMethod = a2dp.javaClass.getMethod("getActiveDevice")
+                val activeDevice = getActiveDeviceMethod.invoke(a2dp) as? android.bluetooth.BluetoothDevice
+                
+                if (activeDevice != null) {
+                    val codecStatus = getCodecStatusMethod.invoke(a2dp, activeDevice)
+                    if (codecStatus != null) {
+                        val getCodecConfigMethod = codecStatus.javaClass.getMethod("getCodecConfig")
+                        val codecConfig = getCodecConfigMethod.invoke(codecStatus)
+                        if (codecConfig != null) {
+                            val getCodecTypeMethod = codecConfig.javaClass.getMethod("getCodecType")
+                            val type = getCodecTypeMethod.invoke(codecConfig) as Int
+                            return mapCodecTypeToString(type)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Log.e("MusicService", "Failed to get BT codec via reflection", e)
+            }
+        }
+
+        // Bluetooth以外、または取得失敗時はソースファイルのコーデックを表示
+        return if (currentAudioCodec == "RAW") "PCM" else currentAudioCodec
+    }
+
+    private fun isExternalOutputConnected(): Boolean {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        for (device in devices) {
+            when (device.type) {
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_USB_HEADSET -> return true
+            }
+        }
+        return false
+    }
+
+    fun getCurrentOutputDevice(): String {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        for (device in devices) {
+            when (device.type) {
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_USB_HEADSET -> {
+                    return device.productName?.toString() ?: "外部出力"
+                }
+            }
+        }
+        return "端末スピーカー"
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -485,6 +607,14 @@ class MusicService : Service() {
             setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             isActive = true
         }
+        
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
+        
+        @Suppress("DEPRECATION")
+        val btAdapter = BluetoothAdapter.getDefaultAdapter()
+        btAdapter?.getProfileProxy(this, bluetoothProfileListener, BluetoothProfile.A2DP)
+
         instance = this
         updatePlaybackState(false, 0)
         timeoutHandler.post(timeoutRunnable)
@@ -499,6 +629,12 @@ class MusicService : Service() {
 
     override fun onDestroy() {
         timeoutHandler.removeCallbacks(timeoutRunnable)
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        
+        @Suppress("DEPRECATION")
+        BluetoothAdapter.getDefaultAdapter()?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
+
         stopPlayer()
         mediaSession?.isActive = false
         mediaSession?.release()

@@ -53,6 +53,7 @@ import com.example.idmusic.ui.theme.IDmusicTheme
 import androidx.compose.ui.graphics.ColorFilter
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import androidx.compose.ui.text.style.TextAlign
 
 class MainActivity : ComponentActivity() {
 
@@ -1226,30 +1227,35 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        playbackControlBox(false) // 曲リストタブではリピート・シャッフルを非表示
+                        playbackControlBox(false)
                     }
                 } else {
                     // 再生ステータスタブ
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(text = "サーバー側の音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = serverOutputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
-                        
-                        Spacer(modifier = Modifier.height(32.dp))
-                        
-                        Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = serverAudioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
-                        
-                        Spacer(modifier = Modifier.height(32.dp))
-                        
-                        Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = serverAudioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(text = "サーバー側の音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = serverOutputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(32.dp))
+                            
+                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = serverAudioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(32.dp))
+                            
+                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = serverAudioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(48.dp))
+                        }
+                        playbackControlBox(false)
                     }
                 }
             }
@@ -1280,6 +1286,11 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         var isRepeatEnabled by remember { mutableStateOf(false) }
         var isShuffleEnabled by remember { mutableStateOf(false) }
+
+        // 再生ステータス用
+        var outputDevice by remember { mutableStateOf("取得中...") }
+        var audioFormat by remember { mutableStateOf("未取得") }
+        var audioCodec by remember { mutableStateOf("取得中...") }
 
         fun getAlbumArtUri(albumId: Long): Uri {
             val artworkUri = Uri.parse("content://media/external/audio/albumart")
@@ -1421,6 +1432,9 @@ class MainActivity : ComponentActivity() {
                         currentPosition = service.getCurrentPosition()
                         duration = service.getDuration()
                     }
+                    audioFormat = service.getCurrentAudioFormat()
+                    audioCodec = service.getCurrentAudioCodec()
+                    outputDevice = service.getCurrentOutputDevice()
                 }
                 delay(500)
             }
@@ -1443,284 +1457,320 @@ class MainActivity : ComponentActivity() {
                         label = { Text("曲リスト", color = if(selectedTab==1) Color.Black else Color.Gray) },
                         colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
                     )
+                    NavigationBarItem(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        icon = { Icon(painterResource(android.R.drawable.ic_menu_info_details), "再生ステータス", tint = if(selectedTab==2) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
+                        label = { Text("再生ステータス", color = if(selectedTab==2) Color.Black else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                    )
                 }
             }
         ) { padding ->
             Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-                if (selectedTab == 0) {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        if (!isBluetoothEnabled && onConnectBluetooth != null) {
-                            OutlinedButton(
-                                onClick = onConnectBluetooth,
-                                modifier = Modifier.padding(bottom = 16.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
-                            ) {
-                                Text("デバイスと通信する")
-                            }
-                        } else if (isBluetoothEnabled && !isConnected && onStopCommunication != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    server?.stopServer()
-                                    onStopCommunication()
-                                },
-                                modifier = Modifier.padding(bottom = 16.dp),
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
-                            ) {
-                                Text("通信停止")
-                            }
-                        }
-
-                        Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード", color = Color.Black)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Image(
-                            painter = rememberAsyncImagePainter(
-                                model = albumArtUri ?: R.drawable.no_image,
-                                error = painterResource(R.drawable.no_image),
-                                fallback = painterResource(R.drawable.no_image)
-                            ),
-                            contentDescription = "Album Art",
-                            modifier = Modifier.size(250.dp).padding(16.dp),
-                            contentScale = ContentScale.Fit
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        playingTitle?.let {
-                            Text("再生中: $it", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            
-                            Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(top = 8.dp)
-                            ) {
-                                IconButton(onClick = { skipPrevious() }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.skip_left), 
-                                        contentDescription = "Skip Previous", 
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(48.dp)
-                                    )
+                when (selectedTab) {
+                    0 -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            if (!isBluetoothEnabled && onConnectBluetooth != null) {
+                                OutlinedButton(
+                                    onClick = onConnectBluetooth,
+                                    modifier = Modifier.padding(bottom = 16.dp),
+                                    border = BorderStroke(1.dp, Color.Black),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                ) {
+                                    Text("デバイスと通信する")
                                 }
-                                Spacer(modifier = Modifier.width(24.dp))
-                                // 再生・一時停止ボタン
+                            } else if (isBluetoothEnabled && !isConnected && onStopCommunication != null) {
                                 OutlinedButton(
                                     onClick = {
-                                        if (isPlaying) {
-                                            if (isBluetoothEnabled) {
-                                                server?.pauseMusic()
-                                            } else {
-                                                MusicService.instance?.pauseLocal()
-                                            }
-                                            isPlaying = false
-                                        } else {
-                                            if (isBluetoothEnabled) {
-                                                server?.resumeMusic()
-                                            } else {
-                                                MusicService.instance?.resumeLocal()
-                                            }
-                                            isPlaying = true
-                                        }
+                                        server?.stopServer()
+                                        onStopCommunication()
                                     },
-                                    modifier = Modifier.width(90.dp).height(56.dp),
-                                    shape = RoundedCornerShape(percent = 50),
+                                    modifier = Modifier.padding(bottom = 16.dp),
                                     border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) { 
-                                    Icon(
-                                        painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
-                                        contentDescription = "Play/Pause",
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(24.dp))
-                                IconButton(onClick = { skipNext() }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.skip_right), 
-                                        contentDescription = "Skip Next", 
-                                        tint = Color.Black,
-                                        modifier = Modifier.size(48.dp)
-                                    )
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                ) {
+                                    Text("通信停止")
                                 }
                             }
-                        }
-                        
-                        if (duration > 0) {
-                            val sliderValue = currentPosition.toFloat() / duration.toFloat()
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
-                            ) {
-                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
-                                Slider(
-                                    value = sliderValue,
-                                    onValueChange = { currentPosition = (it * duration).toInt() },
-                                    onValueChangeFinished = { 
-                                        if (isBluetoothEnabled) server?.seekTo(currentPosition) else {
-                                            val intent = Intent(context, MusicService::class.java).apply {
-                                                action = MusicService.ACTION_SEEK
-                                                putExtra("SEEK_POS", currentPosition)
-                                            }
-                                            context.startService(intent)
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = Color.Black, 
-                                        activeTrackColor = Color.Black,
-                                        inactiveTrackColor = Color.LightGray
-                                    ),
-                                    thumb = {
-                                        Surface(
-                                            modifier = Modifier.size(12.dp),
-                                            shape = CircleShape,
-                                            color = Color.Black
-                                        ) {}
-                                    },
-                                    track = { sliderState ->
-                                        SliderDefaults.Track(
-                                            sliderState = sliderState,
-                                            modifier = Modifier.height(2.dp),
-                                            colors = SliderDefaults.colors(
-                                                activeTrackColor = Color.Black,
-                                                inactiveTrackColor = Color.LightGray
-                                            )
+
+                            Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード", color = Color.Black)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Image(
+                                painter = rememberAsyncImagePainter(
+                                    model = albumArtUri ?: R.drawable.no_image,
+                                    error = painterResource(R.drawable.no_image),
+                                    fallback = painterResource(R.drawable.no_image)
+                                ),
+                                contentDescription = "Album Art",
+                                modifier = Modifier.size(250.dp).padding(16.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            playingTitle?.let {
+                                Text("再生中: $it", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                
+                                Row(
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                ) {
+                                    IconButton(onClick = { skipPrevious() }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.skip_left), 
+                                            contentDescription = "Skip Previous", 
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(48.dp)
                                         )
                                     }
-                                )
-                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = {
-                                    isRepeatEnabled = !isRepeatEnabled
-                                    server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.repeat),
-                                        contentDescription = "Repeat",
-                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                                    Spacer(modifier = Modifier.width(24.dp))
+                                    // 再生・一時停止ボタン
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (isPlaying) {
+                                                if (isBluetoothEnabled) {
+                                                    server?.pauseMusic()
+                                                } else {
+                                                    MusicService.instance?.pauseLocal()
+                                                }
+                                                isPlaying = false
+                                            } else {
+                                                if (isBluetoothEnabled) {
+                                                    server?.resumeMusic()
+                                                } else {
+                                                    MusicService.instance?.resumeLocal()
+                                                }
+                                                isPlaying = true
+                                            }
+                                        },
+                                        modifier = Modifier.width(90.dp).height(56.dp),
+                                        shape = RoundedCornerShape(percent = 50),
+                                        border = BorderStroke(1.dp, Color.Black),
+                                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) { 
+                                        Icon(
+                                            painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
+                                            contentDescription = "Play/Pause",
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(32.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(24.dp))
+                                    IconButton(onClick = { skipNext() }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.skip_right), 
+                                            contentDescription = "Skip Next", 
+                                            tint = Color.Black,
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                    }
                                 }
-                                IconButton(onClick = {
-                                    isShuffleEnabled = !isShuffleEnabled
-                                    server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.shuffle),
-                                        contentDescription = "Shuffle",
-                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
+                            }
+                            
+                            if (duration > 0) {
+                                val sliderValue = currentPosition.toFloat() / duration.toFloat()
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
+                                ) {
+                                    Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                    Slider(
+                                        value = sliderValue,
+                                        onValueChange = { currentPosition = (it * duration).toInt() },
+                                        onValueChangeFinished = { 
+                                            if (isBluetoothEnabled) server?.seekTo(currentPosition) else {
+                                                val intent = Intent(context, MusicService::class.java).apply {
+                                                    action = MusicService.ACTION_SEEK
+                                                    putExtra("SEEK_POS", currentPosition)
+                                                }
+                                                context.startService(intent)
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color.Black, 
+                                            activeTrackColor = Color.Black,
+                                            inactiveTrackColor = Color.LightGray
+                                        ),
+                                        thumb = {
+                                            Surface(
+                                                modifier = Modifier.size(12.dp),
+                                                shape = CircleShape,
+                                                color = Color.Black
+                                            ) {}
+                                        },
+                                        track = { sliderState ->
+                                            SliderDefaults.Track(
+                                                sliderState = sliderState,
+                                                modifier = Modifier.height(2.dp),
+                                                colors = SliderDefaults.colors(
+                                                    activeTrackColor = Color.Black,
+                                                    inactiveTrackColor = Color.LightGray
+                                                )
+                                            )
+                                        }
                                     )
+                                    Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
                                 }
                             }
-                            OutlinedButton(
-                                onClick = { 
-                                    server?.stopServer()
-                                    val stopIntent = Intent(context, MusicService::class.java)
-                                    context.stopService(stopIntent)
-                                    onCancel() 
-                                },
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
-                            ) { Text(if (isBluetoothEnabled) "切断" else "終了") }
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    IconButton(onClick = {
+                                        isRepeatEnabled = !isRepeatEnabled
+                                        server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.repeat),
+                                            contentDescription = "Repeat",
+                                            tint = if (isRepeatEnabled) Color.Black else Color.Gray,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    IconButton(onClick = {
+                                        isShuffleEnabled = !isShuffleEnabled
+                                        server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.shuffle),
+                                            contentDescription = "Shuffle",
+                                            tint = if (isShuffleEnabled) Color.Black else Color.Gray,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                                OutlinedButton(
+                                    onClick = { 
+                                        server?.stopServer()
+                                        val stopIntent = Intent(context, MusicService::class.java)
+                                        context.stopService(stopIntent)
+                                        onCancel() 
+                                    },
+                                    border = BorderStroke(1.dp, Color.Black),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                ) { Text(if (isBluetoothEnabled) "切断" else "終了") }
+                            }
                         }
                     }
-                } else {
-                    val grouped = musicList.groupBy { it.folder }
-                    val expandedState = remember { mutableStateMapOf<String, Boolean>() }
+                    1 -> {
+                        val grouped = musicList.groupBy { it.folder }
+                        val expandedState = remember { mutableStateMapOf<String, Boolean>() }
 
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
-                        grouped.forEach { (folder, songs) ->
-                            val isExpanded = expandedState[folder] ?: false
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .border(width = 1.dp, Color.Black)
-                                        .height(56.dp)
-                                        .clickable { expandedState[folder] = !isExpanded }
-                                        .padding(horizontal = 8.dp),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(24.dp),
-                                            tint = Color.Black
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(text = folder, color = Color.Black)
-                                    }
-                                }
-                            }
-                            if (isExpanded) {
-                                items(songs) { song ->
-                                    val isCurrent = song.uri.toString() == currentSongUri
-                                    
-                                    Column(
+                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                            grouped.forEach { (folder, songs) ->
+                                val isExpanded = expandedState[folder] ?: false
+                                item {
+                                    Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
-                                            .clickable { playSong(song.uri.toString()) }
-                                            .padding(12.dp)
+                                            .border(width = 1.dp, Color.Black)
+                                            .height(56.dp)
+                                            .clickable { expandedState[folder] = !isExpanded }
+                                            .padding(horizontal = 8.dp),
+                                        contentAlignment = Alignment.CenterStart
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    if (isCurrent) {
-                                                        Icon(
-                                                            painter = painterResource(R.drawable.play),
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(16.dp),
-                                                            tint = Color.Black
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                    }
-                                                    Text(
-                                                        text = song.title,
-                                                        color = if (isCurrent) Color.Black else Color.DarkGray
-                                                    )
-                                                }
-                                                Text(
-                                                    text = "[${song.storage}] ${song.path}",
-                                                    fontSize = 12.sp,
-                                                    color = Color.Gray.copy(alpha = 0.7f),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Image(
-                                                painter = rememberAsyncImagePainter(
-                                                    model = getAlbumArtUri(song.albumId),
-                                                    error = painterResource(R.drawable.no_image),
-                                                    placeholder = painterResource(R.drawable.no_image)
-                                                ),
-                                                contentDescription = "Song Album Art",
-                                                modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
-                                                contentScale = ContentScale.Crop
+                                            Icon(
+                                                painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(24.dp),
+                                                tint = Color.Black
                                             )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(text = folder, color = Color.Black)
                                         }
                                     }
-                                    HorizontalDivider(thickness = 2.dp, color = Color.Gray)
+                                }
+                                if (isExpanded) {
+                                    items(songs) { song ->
+                                        val isCurrent = song.uri.toString() == currentSongUri
+                                        
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+                                                .clickable { playSong(song.uri.toString()) }
+                                                .padding(12.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        if (isCurrent) {
+                                                            Icon(
+                                                                painter = painterResource(R.drawable.play),
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(16.dp),
+                                                                tint = Color.Black
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                        }
+                                                        Text(
+                                                            text = song.title,
+                                                            color = if (isCurrent) Color.Black else Color.DarkGray
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = "[${song.storage}] ${song.path}",
+                                                        fontSize = 12.sp,
+                                                        color = Color.Gray.copy(alpha = 0.7f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Image(
+                                                    painter = rememberAsyncImagePainter(
+                                                        model = getAlbumArtUri(song.albumId),
+                                                        error = painterResource(R.drawable.no_image),
+                                                        placeholder = painterResource(R.drawable.no_image)
+                                                    ),
+                                                    contentDescription = "Song Album Art",
+                                                    modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
+                                                    contentScale = ContentScale.Crop
+                                                )
+                                            }
+                                        }
+                                        HorizontalDivider(thickness = 2.dp, color = Color.Gray)
+                                    }
                                 }
                             }
+                        }
+                    }
+                    2 -> {
+                        // 再生ステータスタブ (サーバー/ローカル側)
+                        Column(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(text = "音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = outputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(32.dp))
+                            
+                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = audioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(32.dp))
+                            
+                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = audioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            
+                            Spacer(modifier = Modifier.height(48.dp))
                         }
                     }
                 }

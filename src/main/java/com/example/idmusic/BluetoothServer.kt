@@ -74,6 +74,7 @@ class BluetoothServer(private val context: Context) : Thread() {
     var onClientNameReceived: ((String) -> Unit)? = null
     var onDisconnected: (() -> Unit)? = null
     var onReceiveMessage: ((String) -> Unit)? = null
+    var onCodecStatusChanged: ((String) -> Unit)? = null
 
     private var musicListToSend: List<MusicItem> = emptyList()
 
@@ -369,9 +370,8 @@ class BluetoothServer(private val context: Context) : Thread() {
                     var outputName = "スピーカー"
                     var hasBluetooth = false
                     
-                    // 音声出力先の判定
                     val btDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
-                    val usbDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
+                    val usbDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && it.type == AudioDeviceInfo.TYPE_USB_HEADSET) }
                     val wiredDeviceInfo = devices.find { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES }
 
                     if (btDeviceInfo != null) {
@@ -395,6 +395,7 @@ class BluetoothServer(private val context: Context) : Thread() {
 
                     if (codecName != lastSentCodec) {
                         sendMessage("AUDIO_CODEC:$codecName")
+                        onCodecStatusChanged?.invoke(codecName)
                         lastSentCodec = codecName
                     }
 
