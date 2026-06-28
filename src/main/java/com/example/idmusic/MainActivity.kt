@@ -18,6 +18,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.rememberAsyncImagePainter
 import androidx.compose.foundation.border
@@ -256,7 +259,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun RoleSelectScreen(onSelect: (String) -> Unit) {
         val context = LocalContext.current
-        val view = LocalView.current
+        val isDark = isSystemInDarkTheme()
         
         // バージョン名の取得
         val versionName = remember {
@@ -271,13 +274,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        SideEffect {
-            val window = (view.context as android.app.Activity).window
-            window.statusBarColor = android.graphics.Color.WHITE
-            WindowCompat.getInsetsController(window, view)
-                ?.isAppearanceLightStatusBars = true
-        }
-
+        @Suppress("DEPRECATION")
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -288,7 +285,7 @@ class MainActivity : ComponentActivity() {
 
             Box(contentAlignment = Alignment.BottomEnd) {
                 Image(
-                    painter = painterResource(id = R.drawable.app_logo),
+                    painter = painterResource(id = if (isDark) R.drawable.app_logo_mr else R.drawable.app_logo),
                     contentDescription = "App Logo",
                     modifier = Modifier
                         .size(500.dp)
@@ -298,7 +295,7 @@ class MainActivity : ComponentActivity() {
                     text = "Ver $versionName",
                     modifier = Modifier.padding(bottom = 48.dp, end = 32.dp),
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.Gray
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -309,8 +306,8 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(
                     onClick = { onSelect("CLIENT") },
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    border = BorderStroke(1.dp, Color.Black),
-                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                 ) {
                     Text("送信側")
                 }
@@ -320,8 +317,8 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(
                     onClick = { onSelect("SERVER") },
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    border = BorderStroke(1.dp, Color.Black),
-                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                 ) {
                     Text("受信側")
                 }
@@ -331,8 +328,8 @@ class MainActivity : ComponentActivity() {
                 OutlinedButton(
                     onClick = { onSelect("LOCAL") },
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    border = BorderStroke(1.dp, Color.Black),
-                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                 ) {
                     Text("ローカル再生")
                 }
@@ -348,6 +345,7 @@ class MainActivity : ComponentActivity() {
         onDisconnect: () -> Unit
     ) {
         val context = LocalContext.current
+        val isDark = isSystemInDarkTheme()
         val bluetoothClient = remember { BluetoothClient(context) }
         var connectedDeviceName by remember { mutableStateOf("未接続") }
         var deviceList by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
@@ -377,13 +375,6 @@ class MainActivity : ComponentActivity() {
         // アルバムアートキャッシュ管理用カウンター (再描画トリガー)
         var artUpdateCounter by remember { mutableStateOf(0) }
         val cacheFolder = remember { File(context.filesDir, "Fpathmusic") }
-
-        val view = LocalView.current
-        SideEffect {
-            val window = (view.context as android.app.Activity).window
-            window.statusBarColor = android.graphics.Color.WHITE
-            WindowCompat.getInsetsController(window, view)?.isAppearanceLightStatusBars = true
-        }
 
         fun playSong(song: MusicItem) {
             bluetoothClient.sendPlay(song.uri.toString())
@@ -632,27 +623,29 @@ class MainActivity : ComponentActivity() {
         Scaffold(
             bottomBar = {
                 if (isConnected) {
-                    NavigationBar(containerColor = Color.White) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                        val selectedLabelColor = if (isDark) Color.White else Color.Black
+                        val indicatorColor = if (isDark) MaterialTheme.colorScheme.primaryContainer else Color.LightGray
                         NavigationBarItem(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
                             icon = { Icon(painterResource(R.drawable.play), "再生メディア", tint = if(selectedTab==0) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                            label = { Text("再生メディア", color = if(selectedTab==0) Color.Black else Color.Gray) },
-                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                            label = { Text("再生メディア", color = if(selectedTab==0) selectedLabelColor else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                         )
                         NavigationBarItem(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
                             icon = { Icon(painterResource(R.drawable.lists), "曲リスト", tint = if(selectedTab==1) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                            label = { Text("曲リスト", color = if(selectedTab==1) Color.Black else Color.Gray) },
-                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                            label = { Text("曲リスト", color = if(selectedTab==1) selectedLabelColor else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                         )
                         NavigationBarItem(
                             selected = selectedTab == 2,
                             onClick = { selectedTab = 2 },
                             icon = { Icon(painterResource(android.R.drawable.ic_menu_info_details), "再生ステータス", tint = if(selectedTab==2) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                            label = { Text("再生ステータス", color = if(selectedTab==2) Color.Black else Color.Gray) },
-                            colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                            label = { Text("再生ステータス", color = if(selectedTab==2) selectedLabelColor else Color.Gray) },
+                            colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                         )
                     }
                 }
@@ -667,20 +660,20 @@ class MainActivity : ComponentActivity() {
                         .fillMaxWidth()
                         .padding(8.dp),
                     elevation = CardDefaults.cardElevation(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(8.dp)) {
                         if (currentSongTitle != null) {
                             Text(
                                 text = "♪: $currentSongTitle",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color.Black,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                                 )
                         }
                         
-                        Text("接続デバイス: $connectedDeviceName", color = Color.Black)
+                        Text("接続デバイス: $connectedDeviceName", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -691,7 +684,7 @@ class MainActivity : ComponentActivity() {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_left),
                                     contentDescription = "Skip Previous", 
-                                    tint = Color.Black,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(48.dp)
                                 )
                             }
@@ -717,14 +710,14 @@ class MainActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.width(90.dp).height(56.dp),
                                 shape = RoundedCornerShape(percent = 50),
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface),
                                 contentPadding = PaddingValues(0.dp)
                             ) {
                                 Icon(
                                     painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
                                     contentDescription = "Play/Pause",
-                                    tint = Color.Black,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(32.dp)
                                 )
                             }
@@ -733,7 +726,7 @@ class MainActivity : ComponentActivity() {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_right),
                                     contentDescription = "Skip Next", 
-                                    tint = Color.Black,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(48.dp)
                                 )
                             }
@@ -744,7 +737,7 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
                         ) {
-                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Slider(
                                 value = sliderValue,
                                 onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
@@ -752,15 +745,15 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.weight(1f),
                                 enabled = duration > 0,
                                 colors = SliderDefaults.colors(
-                                    thumbColor = Color.Black, 
-                                    activeTrackColor = Color.Black,
-                                    inactiveTrackColor = Color.LightGray
+                                    thumbColor = MaterialTheme.colorScheme.primary, 
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                 ),
                                 thumb = {
                                     Surface(
                                         modifier = Modifier.size(12.dp),
                                         shape = CircleShape,
-                                        color = Color.Black
+                                        color = MaterialTheme.colorScheme.primary
                                     ) {}
                                 },
                                 track = { sliderState ->
@@ -768,13 +761,13 @@ class MainActivity : ComponentActivity() {
                                         sliderState = sliderState,
                                         modifier = Modifier.height(2.dp),
                                         colors = SliderDefaults.colors(
-                                            activeTrackColor = Color.Black,
-                                            inactiveTrackColor = Color.LightGray
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                         )
                                     )
                                 }
                             )
-                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         
                         // サーバー音量操作 (プラスマイナスボタンとスライダー)
@@ -792,7 +785,7 @@ class MainActivity : ComponentActivity() {
                                     painter = painterResource(R.drawable.volume_down),
                                     contentDescription = "Volume Down", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Black
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             
@@ -807,15 +800,15 @@ class MainActivity : ComponentActivity() {
                                 valueRange = 0f..serverMaxVolume.toFloat(),
                                 modifier = Modifier.weight(1f),
                                 colors = SliderDefaults.colors(
-                                    thumbColor = Color.Black, 
-                                    activeTrackColor = Color.Black,
-                                    inactiveTrackColor = Color.LightGray
+                                    thumbColor = MaterialTheme.colorScheme.primary, 
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                 ),
                                 thumb = {
                                     Surface(
                                         modifier = Modifier.size(12.dp),
                                         shape = CircleShape,
-                                        color = Color.Black
+                                        color = MaterialTheme.colorScheme.primary
                                     ) {}
                                 },
                                 track = { sliderState ->
@@ -823,8 +816,8 @@ class MainActivity : ComponentActivity() {
                                         sliderState = sliderState,
                                         modifier = Modifier.height(2.dp),
                                         colors = SliderDefaults.colors(
-                                            activeTrackColor = Color.Black,
-                                            inactiveTrackColor = Color.LightGray
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                         )
                                     )
                                 }
@@ -842,10 +835,10 @@ class MainActivity : ComponentActivity() {
                                     painter = painterResource(R.drawable.volume_up),
                                     contentDescription = "Volume Up", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Black
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = Color.Black)
+                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
 
                         Row(
@@ -855,28 +848,24 @@ class MainActivity : ComponentActivity() {
                         ) {
                             if (showSettings) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    IconButton(onClick = {
-                                        isRepeatEnabled = !isRepeatEnabled
-                                        bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.repeat),
-                                            contentDescription = "Repeat",
-                                            tint = if (isRepeatEnabled) Color.Black else Color.Gray,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                    IconButton(onClick = {
-                                        isShuffleEnabled = !isShuffleEnabled
-                                        bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.shuffle),
-                                            contentDescription = "Shuffle",
-                                            tint = if (isShuffleEnabled) Color.Black else Color.Gray,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
+                                    ToggleButtonWithSlash(
+                                        painter = painterResource(R.drawable.repeat),
+                                        checked = isRepeatEnabled,
+                                        onCheckedChange = {
+                                            isRepeatEnabled = !isRepeatEnabled
+                                            bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                        },
+                                        contentDescription = "Repeat"
+                                    )
+                                    ToggleButtonWithSlash(
+                                        painter = painterResource(R.drawable.shuffle),
+                                        checked = isShuffleEnabled,
+                                        onCheckedChange = {
+                                            isShuffleEnabled = !isShuffleEnabled
+                                            bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                        },
+                                        contentDescription = "Shuffle"
+                                    )
                                 }
                             } else {
                                 // 設定非表示時は空白を埋めるためのダミー
@@ -884,7 +873,7 @@ class MainActivity : ComponentActivity() {
                             }
                             TextButton(onClick = {
                                 bluetoothClient.sendDisconnect()
-                            }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)) { Text("切断") }
+                            }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)) { Text("切断") }
                         }
                     }
                 }
@@ -902,8 +891,8 @@ class MainActivity : ComponentActivity() {
                     ) {
                         OutlinedButton(
                             onClick = { onDisconnect() },
-                            border = BorderStroke(1.dp, Color.Black),
-                            colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                         ) {
                             Text("← 戻る")
                         }
@@ -934,9 +923,9 @@ class MainActivity : ComponentActivity() {
                                     .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = device.name ?: "不明", modifier = Modifier.weight(1f))
+                                Text(text = device.name ?: "不明", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
                                 if (connectingDevice == device) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Black)
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                         }
@@ -948,7 +937,7 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("接続デバイス: $connectedDeviceName", color = Color.Black)
+                        Text("接続デバイス: $connectedDeviceName", color = MaterialTheme.colorScheme.onSurface)
                         Spacer(modifier = Modifier.height(16.dp))
                         
                         key(currentSongUri, artUpdateCounter) {
@@ -969,7 +958,7 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(16.dp))
                         
                         currentSongTitle?.let { title ->
-                            Text("再生中: $title", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("再生中: $title", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             
                             Row(
                                 horizontalArrangement = Arrangement.Center,
@@ -980,7 +969,7 @@ class MainActivity : ComponentActivity() {
                                     Icon(
                                         painter = painterResource(R.drawable.skip_left), 
                                         contentDescription = "Skip Previous", 
-                                        tint = Color.Black,
+                                        tint = MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.size(48.dp)
                                     )
                                 }
@@ -1006,14 +995,14 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.width(90.dp).height(56.dp),
                                     shape = RoundedCornerShape(percent = 50),
-                                    border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface),
                                     contentPadding = PaddingValues(0.dp)
                                 ) { 
                                     Icon(
                                         painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
                                         contentDescription = "Play/Pause",
-                                        tint = Color.Black,
+                                        tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(32.dp)
                                     )
                                 }
@@ -1022,7 +1011,7 @@ class MainActivity : ComponentActivity() {
                                     Icon(
                                         painter = painterResource(R.drawable.skip_right), 
                                         contentDescription = "Skip Next", 
-                                        tint = Color.Black,
+                                        tint = MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.size(48.dp)
                                     )
                                 }
@@ -1035,21 +1024,21 @@ class MainActivity : ComponentActivity() {
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
                             ) {
-                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                                 Slider(
                                     value = sliderValue,
                                     onValueChange = { currentPosition = (it * duration).toInt() },
                                     onValueChangeFinished = { bluetoothClient.sendSeek(currentPosition) },
                                     modifier = Modifier.weight(1f),
                                     colors = SliderDefaults.colors(
-                                        thumbColor = Color.Black, 
-                                        activeTrackColor = Color.Black,
-                                        inactiveTrackColor = Color.LightGray
+                                        thumbColor = MaterialTheme.colorScheme.primary, 
+                                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                                        inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                     ),
-                                    thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = Color.Black) {} },
-                                    track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = Color.Black, inactiveTrackColor = Color.LightGray)) }
+                                    thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) {} },
+                                    track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = MaterialTheme.colorScheme.primary, inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant)) }
                                 )
-                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         
@@ -1068,7 +1057,7 @@ class MainActivity : ComponentActivity() {
                                     painter = painterResource(R.drawable.volume_down),
                                     contentDescription = "Volume Down", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Black
+                                    tint = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             Spacer(modifier = Modifier.width(16.dp))
@@ -1081,12 +1070,12 @@ class MainActivity : ComponentActivity() {
                                 valueRange = 0f..serverMaxVolume.toFloat(),
                                 modifier = Modifier.weight(1f),
                                 colors = SliderDefaults.colors(
-                                    thumbColor = Color.Black, 
-                                    activeTrackColor = Color.Black,
-                                    inactiveTrackColor = Color.LightGray
+                                    thumbColor = MaterialTheme.colorScheme.primary, 
+                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                 ),
-                                thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = Color.Black) {} },
-                                track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = Color.Black, inactiveTrackColor = Color.LightGray)) }
+                                thumb = { Surface(modifier = Modifier.size(12.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) {} },
+                                track = { SliderDefaults.Track(it, modifier = Modifier.height(2.dp), colors = SliderDefaults.colors(activeTrackColor = MaterialTheme.colorScheme.primary, inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant)) }
                             )
                             Spacer(modifier = Modifier.width(16.dp))
                             IconButton(onClick = { 
@@ -1099,10 +1088,10 @@ class MainActivity : ComponentActivity() {
                                     painter = painterResource(R.drawable.volume_up),
                                     contentDescription = "Volume Up", 
                                     modifier = Modifier.fillMaxSize(),
-                                    tint = Color.Black
+                                    tint = MaterialTheme.colorScheme.onSurface
                                 )
                             }
-                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = Color.Black)
+                            Text(text = "$serverVolume", modifier = Modifier.width(20.dp), fontSize = 12.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End, color = MaterialTheme.colorScheme.onSurface)
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -1113,35 +1102,31 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = {
-                                    isRepeatEnabled = !isRepeatEnabled
-                                    bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.repeat),
-                                        contentDescription = "Repeat",
-                                        tint = if (isRepeatEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                IconButton(onClick = {
-                                    isShuffleEnabled = !isShuffleEnabled
-                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
-                                }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.shuffle),
-                                        contentDescription = "Shuffle",
-                                        tint = if (isShuffleEnabled) Color.Black else Color.Gray,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
+                                ToggleButtonWithSlash(
+                                    painter = painterResource(R.drawable.repeat),
+                                    checked = isRepeatEnabled,
+                                    onCheckedChange = {
+                                        isRepeatEnabled = !isRepeatEnabled
+                                        bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                    },
+                                    contentDescription = "Repeat"
+                                )
+                                ToggleButtonWithSlash(
+                                    painter = painterResource(R.drawable.shuffle),
+                                    checked = isShuffleEnabled,
+                                    onCheckedChange = {
+                                        isShuffleEnabled = !isShuffleEnabled
+                                        bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                    },
+                                    contentDescription = "Shuffle"
+                                )
                             }
                             OutlinedButton(
                                 onClick = { 
                                     bluetoothClient.sendDisconnect()
                                 },
-                                border = BorderStroke(1.dp, Color.Black),
-                                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                             ) { Text("切断") }
                         }
                     }
@@ -1156,7 +1141,7 @@ class MainActivity : ComponentActivity() {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .border(width = 1.dp, Color.Black)
+                                            .border(width = 1.dp, MaterialTheme.colorScheme.outline)
                                             .height(56.dp)
                                             .clickable { expandedState[folder] = !isExpanded }
                                             .padding(horizontal = 8.dp),
@@ -1167,10 +1152,10 @@ class MainActivity : ComponentActivity() {
                                                 painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
                                                 contentDescription = null,
                                                 modifier = Modifier.size(24.dp),
-                                                tint = Color.Black
+                                                tint = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(text = folder, color = Color.Black)
+                                            Text(text = folder, color = MaterialTheme.colorScheme.onSurface)
                                         }
                                     }
                                 }
@@ -1180,7 +1165,7 @@ class MainActivity : ComponentActivity() {
                                         Column(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+                                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(2.dp))
                                                 .clickable { playSong(song) }
                                                 .padding(12.dp)
                                         ) {
@@ -1192,16 +1177,16 @@ class MainActivity : ComponentActivity() {
                                                                 painter = painterResource(R.drawable.play),
                                                                 contentDescription = null,
                                                                 modifier = Modifier.size(16.dp),
-                                                                tint = Color.Black
+                                                                tint = MaterialTheme.colorScheme.primary
                                                             )
                                                             Spacer(modifier = Modifier.width(4.dp))
                                                         }
-                                                        Text(text = song.title, color = if (isCurrent) Color.Black else Color.DarkGray)
+                                                        Text(text = song.title, color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                                                     }
                                                     Text(
                                                         text = "[${song.storage}] ${song.path}",
                                                         fontSize = 12.sp,
-                                                        color = Color.Gray.copy(alpha = 0.7f),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis
                                                     )
@@ -1216,13 +1201,13 @@ class MainActivity : ComponentActivity() {
                                                             placeholder = painterResource(R.drawable.no_image)
                                                         ),
                                                         contentDescription = "Song Album Art",
-                                                        modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
+                                                        modifier = Modifier.size(48.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                                                         contentScale = ContentScale.Crop
                                                     )
                                                 }
                                             }
                                         }
-                                        HorizontalDivider(thickness = 2.dp, color = Color.Gray)
+                                        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.outlineVariant)
                                     }
                                 }
                             }
@@ -1237,21 +1222,21 @@ class MainActivity : ComponentActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Text(text = "サーバー側の音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "サーバー側の音声出力先:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = serverOutputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = serverOutputDevice, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(32.dp))
                             
-                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = serverAudioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = serverAudioCodec, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(32.dp))
                             
-                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = serverAudioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = serverAudioFormat, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(48.dp))
                         }
@@ -1272,6 +1257,7 @@ class MainActivity : ComponentActivity() {
         onCancel: () -> Unit
     ) {
         val context = LocalContext.current
+        val isDark = isSystemInDarkTheme()
         val server = remember { if (isBluetoothEnabled) BluetoothServer(context) else null }
 
         var clientName by remember { mutableStateOf(if (isBluetoothEnabled) "未接続" else "ローカル") }
@@ -1442,27 +1428,30 @@ class MainActivity : ComponentActivity() {
 
         Scaffold(
             bottomBar = {
-                NavigationBar(containerColor = Color.White) {
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    val selectedLabelColor = if (isDark) Color.White else Color.Black
+                    val indicatorColor = if (isDark) MaterialTheme.colorScheme.primaryContainer else Color.LightGray
+                    
                     NavigationBarItem(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
                         icon = { Icon(painterResource(R.drawable.play), "再生メディア", tint = if(selectedTab==0) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                        label = { Text("再生メディア", color = if(selectedTab==0) Color.Black else Color.Gray) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        label = { Text("再生メディア", color = if(selectedTab==0) selectedLabelColor else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                     )
                     NavigationBarItem(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
                         icon = { Icon(painterResource(R.drawable.lists), "曲リスト", tint = if(selectedTab==1) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                        label = { Text("曲リスト", color = if(selectedTab==1) Color.Black else Color.Gray) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        label = { Text("曲リスト", color = if(selectedTab==1) selectedLabelColor else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                     )
                     NavigationBarItem(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2 },
                         icon = { Icon(painterResource(android.R.drawable.ic_menu_info_details), "再生ステータス", tint = if(selectedTab==2) Color.Black else Color.Gray, modifier = Modifier.size(35.dp)) },
-                        label = { Text("再生ステータス", color = if(selectedTab==2) Color.Black else Color.Gray) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = Color.LightGray)
+                        label = { Text("再生ステータス", color = if(selectedTab==2) selectedLabelColor else Color.Gray) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = indicatorColor)
                     )
                 }
             }
@@ -1479,8 +1468,8 @@ class MainActivity : ComponentActivity() {
                                 OutlinedButton(
                                     onClick = onConnectBluetooth,
                                     modifier = Modifier.padding(bottom = 16.dp),
-                                    border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                                 ) {
                                     Text("デバイスと通信する")
                                 }
@@ -1491,14 +1480,14 @@ class MainActivity : ComponentActivity() {
                                         onStopCommunication()
                                     },
                                     modifier = Modifier.padding(bottom = 16.dp),
-                                    border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                                 ) {
                                     Text("通信停止")
                                 }
                             }
 
-                            Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード", color = Color.Black)
+                            Text(if (isBluetoothEnabled) (if (isConnected) "接続相手: $clientName" else "接続待機中...") else "ローカル再生モード", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(modifier = Modifier.height(16.dp))
                             Image(
                                 painter = rememberAsyncImagePainter(
@@ -1512,7 +1501,7 @@ class MainActivity : ComponentActivity() {
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             playingTitle?.let {
-                                Text("再生中: $it", style = MaterialTheme.typography.titleMedium, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("再生中: $it", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 
                                 Row(
                                     horizontalArrangement = Arrangement.Center,
@@ -1523,7 +1512,7 @@ class MainActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(R.drawable.skip_left), 
                                             contentDescription = "Skip Previous", 
-                                            tint = Color.Black,
+                                            tint = MaterialTheme.colorScheme.onSurface,
                                             modifier = Modifier.size(48.dp)
                                         )
                                     }
@@ -1549,14 +1538,14 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.width(90.dp).height(56.dp),
                                         shape = RoundedCornerShape(percent = 50),
-                                        border = BorderStroke(1.dp, Color.Black),
-                                        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                        colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface),
                                         contentPadding = PaddingValues(0.dp)
                                     ) { 
                                         Icon(
                                             painter = painterResource(if (isPlaying) R.drawable.pause else R.drawable.play),
                                             contentDescription = "Play/Pause",
-                                            tint = Color.Black,
+                                            tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(32.dp)
                                         )
                                     }
@@ -1565,7 +1554,7 @@ class MainActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(R.drawable.skip_right), 
                                             contentDescription = "Skip Next", 
-                                            tint = Color.Black,
+                                            tint = MaterialTheme.colorScheme.onSurface,
                                             modifier = Modifier.size(48.dp)
                                         )
                                     }
@@ -1578,7 +1567,7 @@ class MainActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)
                                 ) {
-                                    Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                    Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                                     Slider(
                                         value = sliderValue,
                                         onValueChange = { currentPosition = (it * duration).toInt() },
@@ -1593,15 +1582,15 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.weight(1f),
                                         colors = SliderDefaults.colors(
-                                            thumbColor = Color.Black, 
-                                            activeTrackColor = Color.Black,
-                                            inactiveTrackColor = Color.LightGray
+                                            thumbColor = MaterialTheme.colorScheme.primary, 
+                                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                                            inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                         ),
                                         thumb = {
                                             Surface(
                                                 modifier = Modifier.size(12.dp),
                                                 shape = CircleShape,
-                                                color = Color.Black
+                                                color = MaterialTheme.colorScheme.primary
                                             ) {}
                                         },
                                         track = { sliderState ->
@@ -1609,13 +1598,13 @@ class MainActivity : ComponentActivity() {
                                                 sliderState = sliderState,
                                                 modifier = Modifier.height(2.dp),
                                                 colors = SliderDefaults.colors(
-                                                    activeTrackColor = Color.Black,
-                                                    inactiveTrackColor = Color.LightGray
+                                                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                                                 )
                                             )
                                         }
                                     )
-                                    Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = Color.Black)
+                                    Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                             
@@ -1627,28 +1616,24 @@ class MainActivity : ComponentActivity() {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    IconButton(onClick = {
-                                        isRepeatEnabled = !isRepeatEnabled
-                                        server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.repeat),
-                                            contentDescription = "Repeat",
-                                            tint = if (isRepeatEnabled) Color.Black else Color.Gray,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                    IconButton(onClick = {
-                                        isShuffleEnabled = !isShuffleEnabled
-                                        server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.shuffle),
-                                            contentDescription = "Shuffle",
-                                            tint = if (isShuffleEnabled) Color.Black else Color.Gray,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
+                                    ToggleButtonWithSlash(
+                                        painter = painterResource(R.drawable.repeat),
+                                        checked = isRepeatEnabled,
+                                        onCheckedChange = {
+                                            isRepeatEnabled = !isRepeatEnabled
+                                            server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                        },
+                                        contentDescription = "Repeat"
+                                    )
+                                    ToggleButtonWithSlash(
+                                        painter = painterResource(R.drawable.shuffle),
+                                        checked = isShuffleEnabled,
+                                        onCheckedChange = {
+                                            isShuffleEnabled = !isShuffleEnabled
+                                            server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                        },
+                                        contentDescription = "Shuffle"
+                                    )
                                 }
                                 OutlinedButton(
                                     onClick = { 
@@ -1657,8 +1642,8 @@ class MainActivity : ComponentActivity() {
                                         context.stopService(stopIntent)
                                         onCancel() 
                                     },
-                                    border = BorderStroke(1.dp, Color.Black),
-                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color.Black)
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                    colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                                 ) { Text(if (isBluetoothEnabled) "切断" else "終了") }
                             }
                         }
@@ -1674,7 +1659,7 @@ class MainActivity : ComponentActivity() {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .border(width = 1.dp, Color.Black)
+                                            .border(width = 1.dp, MaterialTheme.colorScheme.outline)
                                             .height(56.dp)
                                             .clickable { expandedState[folder] = !isExpanded }
                                             .padding(horizontal = 8.dp),
@@ -1685,10 +1670,10 @@ class MainActivity : ComponentActivity() {
                                                 painter = painterResource(if (isExpanded) R.drawable.folder_open else R.drawable.folder),
                                                 contentDescription = null,
                                                 modifier = Modifier.size(24.dp),
-                                                tint = Color.Black
+                                                tint = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(text = folder, color = Color.Black)
+                                            Text(text = folder, color = MaterialTheme.colorScheme.onSurface)
                                         }
                                     }
                                 }
@@ -1699,7 +1684,7 @@ class MainActivity : ComponentActivity() {
                                         Column(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .border(1.dp, Color.Black, RoundedCornerShape(2.dp))
+                                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(2.dp))
                                                 .clickable { playSong(song.uri.toString()) }
                                                 .padding(12.dp)
                                         ) {
@@ -1711,19 +1696,19 @@ class MainActivity : ComponentActivity() {
                                                                 painter = painterResource(R.drawable.play),
                                                                 contentDescription = null,
                                                                 modifier = Modifier.size(16.dp),
-                                                                tint = Color.Black
+                                                                tint = MaterialTheme.colorScheme.primary
                                                             )
                                                             Spacer(modifier = Modifier.width(4.dp))
                                                         }
                                                         Text(
                                                             text = song.title,
-                                                            color = if (isCurrent) Color.Black else Color.DarkGray
+                                                            color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                                         )
                                                     }
                                                     Text(
                                                         text = "[${song.storage}] ${song.path}",
                                                         fontSize = 12.sp,
-                                                        color = Color.Gray.copy(alpha = 0.7f),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis
                                                     )
@@ -1736,12 +1721,12 @@ class MainActivity : ComponentActivity() {
                                                         placeholder = painterResource(R.drawable.no_image)
                                                     ),
                                                     contentDescription = "Song Album Art",
-                                                    modifier = Modifier.size(48.dp).border(0.5.dp, Color.LightGray),
+                                                    modifier = Modifier.size(48.dp).border(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                                                     contentScale = ContentScale.Crop
                                                 )
                                             }
                                         }
-                                        HorizontalDivider(thickness = 2.dp, color = Color.Gray)
+                                        HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.outlineVariant)
                                     }
                                 }
                             }
@@ -1754,21 +1739,21 @@ class MainActivity : ComponentActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Text(text = "音声出力先:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "音声出力先:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = outputDevice, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = outputDevice, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(32.dp))
                             
-                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "コーデック:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = audioCodec, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = audioCodec, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(32.dp))
                             
-                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = "サンプリングレート/ビット深度:", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = audioFormat, style = MaterialTheme.typography.headlineMedium, color = Color.Black, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text(text = audioFormat, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                             
                             Spacer(modifier = Modifier.height(48.dp))
                         }
@@ -1852,5 +1837,39 @@ class MainActivity : ComponentActivity() {
             }
         }
         return list.sortedWith(compareBy({ it.folder }, { it.title }))
+    }
+}
+
+@Composable
+fun ToggleButtonWithSlash(
+    painter: Painter,
+    checked: Boolean,
+    onCheckedChange: () -> Unit,
+    contentDescription: String?,
+    modifier: Modifier = Modifier
+) {
+    val tintColor = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val slashColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    
+    IconButton(onClick = onCheckedChange, modifier = modifier) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                painter = painter,
+                contentDescription = contentDescription,
+                tint = tintColor,
+                modifier = Modifier.size(24.dp)
+            )
+            if (!checked) {
+                Canvas(modifier = Modifier.size(24.dp)) {
+                    val strokeWidth = 2.dp.toPx()
+                    drawLine(
+                        color = slashColor,
+                        start = androidx.compose.ui.geometry.Offset(x = size.width * 0.1f, y = size.height * 0.1f),
+                        end = androidx.compose.ui.geometry.Offset(x = size.width * 0.9f, y = size.height * 0.9f),
+                        strokeWidth = strokeWidth
+                    )
+                }
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 //MusicService.kt
 package com.example.idmusic
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
 import android.content.Context
@@ -521,24 +522,29 @@ class MusicService : Service() {
             5 -> "aptX Adaptive"
             6 -> "Opus"
             7 -> "LC3 (LE Audio)"
-            // 一部の端末やQualcomm系で 8 以降に aptX TWS+ などが入る場合があります
             else -> "Unknown ($type)"
         }
     }
 
+    @SuppressLint("MissingPermission")
     fun getCurrentAudioCodec(): String {
-        if (!isExternalOutputConnected()) {
-            return "No connect"
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val hasBluetooth = devices.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+
+        // Bluetoothイヤホンが使用されていない場合は「コーデックなし」を返す
+        if (!hasBluetooth) {
+            return "コーデックなし"
         }
         
-        // Bluetooth A2DPコーデック情報の取得を試みる
+        // Bluetooth A2DPコーデック情報の取得を試みる (リフレクションを使用)
         bluetoothA2dp?.let { a2dp ->
             try {
-                val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", android.bluetooth.BluetoothDevice::class.java)
                 val getActiveDeviceMethod = a2dp.javaClass.getMethod("getActiveDevice")
                 val activeDevice = getActiveDeviceMethod.invoke(a2dp) as? android.bluetooth.BluetoothDevice
                 
                 if (activeDevice != null) {
+                    val getCodecStatusMethod = a2dp.javaClass.getMethod("getCodecStatus", android.bluetooth.BluetoothDevice::class.java)
                     val codecStatus = getCodecStatusMethod.invoke(a2dp, activeDevice)
                     if (codecStatus != null) {
                         val getCodecConfigMethod = codecStatus.javaClass.getMethod("getCodecConfig")
@@ -551,43 +557,42 @@ class MusicService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                // Log.e("MusicService", "Failed to get BT codec via reflection", e)
+                // Log failure
             }
         }
 
-        // Bluetooth以外、または取得失敗時はソースファイルのコーデックを表示
+        // Bluetooth接続中だが詳細取得に失敗した場合はソースファイルの形式を表示
         return if (currentAudioCodec == "RAW") "PCM" else currentAudioCodec
-    }
-
-    private fun isExternalOutputConnected(): Boolean {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        for (device in devices) {
-            when (device.type) {
-                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-                AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-                AudioDeviceInfo.TYPE_USB_DEVICE,
-                AudioDeviceInfo.TYPE_USB_HEADSET -> return true
-            }
-        }
-        return false
     }
 
     fun getCurrentOutputDevice(): String {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        for (device in devices) {
-            when (device.type) {
-                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-                AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-                AudioDeviceInfo.TYPE_USB_DEVICE,
-                AudioDeviceInfo.TYPE_USB_HEADSET -> {
-                    return device.productName?.toString() ?: "外部出力"
-                }
-            }
+        
+        // 有線イヤホン/ヘッドセットの判定 (製品名に "h2w" が含まれる場合も考慮)
+        val isWired = devices.any { 
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || 
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            it.productName?.toString()?.contains("h2w", ignoreCase = true) == true
         }
+        if (isWired) {
+            return "イヤホンジャック"
+        }
+        
+        // Bluetooth優先
+        devices.find { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }?.let {
+            return it.productName?.toString() ?: "Bluetooth機器"
+        }
+        
+        // USB (APIレベルのチェックを追加)
+        val usbDevice = devices.find { device ->
+            device.type == AudioDeviceInfo.TYPE_USB_DEVICE || 
+            (Build.VERSION.SDK_INT >= 26 && device.type == AudioDeviceInfo.TYPE_USB_HEADSET)
+        }
+        if (usbDevice != null) {
+            return usbDevice.productName?.toString() ?: "USBオーディオ"
+        }
+
         return "端末スピーカー"
     }
 
@@ -627,6 +632,7 @@ class MusicService : Service() {
         }
     }
 
+    @SuppressLint("MissingPermission")
     override fun onDestroy() {
         timeoutHandler.removeCallbacks(timeoutRunnable)
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager

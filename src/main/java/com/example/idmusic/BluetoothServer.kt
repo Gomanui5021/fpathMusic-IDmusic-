@@ -441,7 +441,8 @@ class BluetoothServer(private val context: Context) : Thread() {
             5 -> "aptX Adaptive"
             6 -> "Opus"
             7 -> "LC3 (LE Audio)"
-            else -> "Codec($type)"
+            // 一部の端末やQualcomm系で 8 以降に aptX TWS+ などが入る場合があります
+            else -> "Unknown ($type)"
         }
     }
 }
