@@ -326,27 +326,40 @@ class MusicService : Service() {
                     sendControlCommand("AUDIO_CODEC:${getCurrentAudioCodec()}")
                 }
 
-                contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
-                    mediaPlayer = MediaPlayer().apply {
-                        setDataSource(fd.fileDescriptor)
-                        prepare()
-                        currentDuration = duration.toLong()
-                        setOnCompletionListener {
-                            Handler(Looper.getMainLooper()).postDelayed({ 
-                                isPlayingLocal = false
-                                updatePlaybackState(false, currentDuration)
-                                updateNotification(false)
-                                sendControlCommand("STATE:PAUSED")
-                                onTrackEnded?.invoke()
-                            }, 500)
-                        }
-                        start()
+                val mp = MediaPlayer()
+                var opened = false
+                try {
+                    contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
+                        mp.setDataSource(fd.fileDescriptor)
+                        opened = true
                     }
-                    isPlayingLocal = true
-                    updatePlaybackState(true, 0)
-                    updateMetadata(currentTitle ?: "不明", currentBitmap, currentDuration, currentAlbumId)
-                    updateNotification(true)
+                } catch (e: Exception) {
+                    Log.w("MusicService", "openFileDescriptor failed, fallback to setDataSource(uri)", e)
                 }
+
+                if (!opened) {
+                    mp.setDataSource(this, uri)
+                }
+
+                mp.apply {
+                    prepare()
+                    currentDuration = duration.toLong()
+                    setOnCompletionListener {
+                        Handler(Looper.getMainLooper()).postDelayed({ 
+                            isPlayingLocal = false
+                            updatePlaybackState(false, currentDuration)
+                            updateNotification(false)
+                            sendControlCommand("STATE:PAUSED")
+                            onTrackEnded?.invoke()
+                        }, 500)
+                    }
+                    start()
+                }
+                mediaPlayer = mp
+                isPlayingLocal = true
+                updatePlaybackState(true, 0)
+                updateMetadata(currentTitle ?: "不明", currentBitmap, currentDuration, currentAlbumId)
+                updateNotification(true)
             }
         } catch (e: Exception) {
             Log.e("MusicService", "再生エラー", e)
