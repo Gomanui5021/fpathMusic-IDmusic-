@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.rememberAsyncImagePainter
 import androidx.compose.foundation.border
@@ -451,6 +452,7 @@ class MainActivity : ComponentActivity() {
         var musicItems by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
         var isRepeatEnabled by remember { mutableStateOf(false) }
         var isShuffleEnabled by remember { mutableStateOf(false) }
+        var isSuperShuffleEnabled by remember { mutableStateOf(false) }
         var selectedTab by remember { mutableStateOf(0) }
         var serverOutputDevice by remember { mutableStateOf("取得中...") }
         var serverAudioFormat by remember { mutableStateOf("未取得") }
@@ -497,6 +499,10 @@ class MainActivity : ComponentActivity() {
         }
 
         fun skipNext() {
+            if (isSuperShuffleEnabled && musicItems.isNotEmpty()) {
+                playSong(musicItems.random())
+                return
+            }
             val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
             if (isShuffleEnabled && currentSong != null) {
                 val folderSongs = musicItems.filter { it.folder == currentSong.folder }
@@ -518,7 +524,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, musicItems, currentSongUri) {
+        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, isSuperShuffleEnabled, musicItems, currentSongUri) {
             MusicService.onTrackEnded = {
                 if (isRepeatEnabled) {
                     val currentSong = musicItems.find { it.uri.toString() == currentSongUri }
@@ -618,10 +624,28 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         message.startsWith("SET_REPEAT:") -> {
-                            isRepeatEnabled = message.removePrefix("SET_REPEAT:") == "ON"
+                            val on = message.removePrefix("SET_REPEAT:") == "ON"
+                            isRepeatEnabled = on
+                            if (on) {
+                                isShuffleEnabled = false
+                                isSuperShuffleEnabled = false
+                            }
                         }
                         message.startsWith("SET_SHUFFLE:") -> {
-                            isShuffleEnabled = message.removePrefix("SET_SHUFFLE:") == "ON"
+                            val on = message.removePrefix("SET_SHUFFLE:") == "ON"
+                            isShuffleEnabled = on
+                            if (on) {
+                                isRepeatEnabled = false
+                                isSuperShuffleEnabled = false
+                            }
+                        }
+                        message.startsWith("SET_SUPER_SHUFFLE:") -> {
+                            val on = message.removePrefix("SET_SUPER_SHUFFLE:") == "ON"
+                            isSuperShuffleEnabled = on
+                            if (on) {
+                                isRepeatEnabled = false
+                                isShuffleEnabled = false
+                            }
                         }
                         message.startsWith("OUTPUT_DEVICE:") -> {
                             serverOutputDevice = message.removePrefix("OUTPUT_DEVICE:")
@@ -903,8 +927,15 @@ class MainActivity : ComponentActivity() {
                                 painter = painterResource(R.drawable.repeat),
                                 checked = isRepeatEnabled,
                                 onCheckedChange = {
-                                    isRepeatEnabled = !isRepeatEnabled
-                                    bluetoothClient.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                    val newRepeatState = !isRepeatEnabled
+                                    isRepeatEnabled = newRepeatState
+                                    if (newRepeatState) {
+                                        isShuffleEnabled = false
+                                        isSuperShuffleEnabled = false
+                                        bluetoothClient.sendMessage("SET_SHUFFLE:OFF")
+                                        bluetoothClient.sendMessage("SET_SUPER_SHUFFLE:OFF")
+                                    }
+                                    bluetoothClient.sendMessage("SET_REPEAT:${if (newRepeatState) "ON" else "OFF"}")
                                 },
                                 contentDescription = "Repeat"
                             )
@@ -912,10 +943,33 @@ class MainActivity : ComponentActivity() {
                                 painter = painterResource(R.drawable.shuffle),
                                 checked = isShuffleEnabled,
                                 onCheckedChange = {
-                                    isShuffleEnabled = !isShuffleEnabled
-                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                    val newShuffleState = !isShuffleEnabled
+                                    isShuffleEnabled = newShuffleState
+                                    if (newShuffleState) {
+                                        isRepeatEnabled = false
+                                        isSuperShuffleEnabled = false
+                                        bluetoothClient.sendMessage("SET_REPEAT:OFF")
+                                        bluetoothClient.sendMessage("SET_SUPER_SHUFFLE:OFF")
+                                    }
+                                    bluetoothClient.sendMessage("SET_SHUFFLE:${if (newShuffleState) "ON" else "OFF"}")
                                 },
                                 contentDescription = "Shuffle"
+                            )
+                            ToggleButtonWithSlash(
+                                painter = painterResource(R.drawable.super_shuffle),
+                                checked = isSuperShuffleEnabled,
+                                onCheckedChange = {
+                                    val newSuperState = !isSuperShuffleEnabled
+                                    isSuperShuffleEnabled = newSuperState
+                                    if (newSuperState) {
+                                        isRepeatEnabled = false
+                                        isShuffleEnabled = false
+                                        bluetoothClient.sendMessage("SET_REPEAT:OFF")
+                                        bluetoothClient.sendMessage("SET_SHUFFLE:OFF")
+                                    }
+                                    bluetoothClient.sendMessage("SET_SUPER_SHUFFLE:${if (newSuperState) "ON" else "OFF"}")
+                                },
+                                contentDescription = "Super Shuffle"
                             )
                         }
                         OutlinedButton(
@@ -1168,6 +1222,7 @@ class MainActivity : ComponentActivity() {
         val scope = rememberCoroutineScope()
         var isRepeatEnabled by remember { mutableStateOf(false) }
         var isShuffleEnabled by remember { mutableStateOf(false) }
+        var isSuperShuffleEnabled by remember { mutableStateOf(false) }
 
         // 再生ステータス用
         var outputDevice by remember { mutableStateOf("取得中...") }
@@ -1210,6 +1265,11 @@ class MainActivity : ComponentActivity() {
         }
 
         fun skipNext() {
+            if (isSuperShuffleEnabled && displayMusicList.isNotEmpty()) {
+                val randomSong = displayMusicList.random()
+                playSong(randomSong.uri.toString())
+                return
+            }
             if (isShuffleEnabled) {
                 val currentSong = displayMusicList.find { it.uri.toString() == currentSongUri }
                 if (currentSong != null) {
@@ -1235,7 +1295,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, displayMusicList, currentSongUri) {
+        LaunchedEffect(isRepeatEnabled, isShuffleEnabled, isSuperShuffleEnabled, displayMusicList, currentSongUri) {
             MusicService.onTrackEnded = {
                 if (isRepeatEnabled) {
                     currentSongUri?.let { scope.launch { playSong(it) } }
@@ -1296,10 +1356,28 @@ class MainActivity : ComponentActivity() {
                 
                 server.onReceiveMessage = { message ->
                     if (message.startsWith("SET_REPEAT:")) {
-                        isRepeatEnabled = message.removePrefix("SET_REPEAT:") == "ON"
+                        val on = message.removePrefix("SET_REPEAT:") == "ON"
+                        isRepeatEnabled = on
+                        if (on) {
+                            isShuffleEnabled = false
+                            isSuperShuffleEnabled = false
+                        }
                     }
                     if (message.startsWith("SET_SHUFFLE:")) {
-                        isShuffleEnabled = message.removePrefix("SET_SHUFFLE:") == "ON"
+                        val on = message.removePrefix("SET_SHUFFLE:") == "ON"
+                        isShuffleEnabled = on
+                        if (on) {
+                            isRepeatEnabled = false
+                            isSuperShuffleEnabled = false
+                        }
+                    }
+                    if (message.startsWith("SET_SUPER_SHUFFLE:")) {
+                        val on = message.removePrefix("SET_SUPER_SHUFFLE:") == "ON"
+                        isSuperShuffleEnabled = on
+                        if (on) {
+                            isRepeatEnabled = false
+                            isShuffleEnabled = false
+                        }
                     }
                 }
             }
@@ -1501,8 +1579,15 @@ class MainActivity : ComponentActivity() {
                                 painter = painterResource(R.drawable.repeat),
                                 checked = isRepeatEnabled,
                                 onCheckedChange = {
-                                    isRepeatEnabled = !isRepeatEnabled
-                                    server?.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                                    val newRepeatState = !isRepeatEnabled
+                                    isRepeatEnabled = newRepeatState
+                                    if (newRepeatState) {
+                                        isShuffleEnabled = false
+                                        isSuperShuffleEnabled = false
+                                        server?.sendMessage("SET_SHUFFLE:OFF")
+                                        server?.sendMessage("SET_SUPER_SHUFFLE:OFF")
+                                    }
+                                    server?.sendMessage("SET_REPEAT:${if (newRepeatState) "ON" else "OFF"}")
                                 },
                                 contentDescription = "Repeat"
                             )
@@ -1510,10 +1595,33 @@ class MainActivity : ComponentActivity() {
                                 painter = painterResource(R.drawable.shuffle),
                                 checked = isShuffleEnabled,
                                 onCheckedChange = {
-                                    isShuffleEnabled = !isShuffleEnabled
-                                    server?.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                                    val newShuffleState = !isShuffleEnabled
+                                    isShuffleEnabled = newShuffleState
+                                    if (newShuffleState) {
+                                        isRepeatEnabled = false
+                                        isSuperShuffleEnabled = false
+                                        server?.sendMessage("SET_REPEAT:OFF")
+                                        server?.sendMessage("SET_SUPER_SHUFFLE:OFF")
+                                    }
+                                    server?.sendMessage("SET_SHUFFLE:${if (newShuffleState) "ON" else "OFF"}")
                                 },
                                 contentDescription = "Shuffle"
+                            )
+                            ToggleButtonWithSlash(
+                                painter = painterResource(R.drawable.super_shuffle),
+                                checked = isSuperShuffleEnabled,
+                                onCheckedChange = {
+                                    val newSuperState = !isSuperShuffleEnabled
+                                    isSuperShuffleEnabled = newSuperState
+                                    if (newSuperState) {
+                                        isRepeatEnabled = false
+                                        isShuffleEnabled = false
+                                        server?.sendMessage("SET_REPEAT:OFF")
+                                        server?.sendMessage("SET_SHUFFLE:OFF")
+                                    }
+                                    server?.sendMessage("SET_SUPER_SHUFFLE:${if (newSuperState) "ON" else "OFF"}")
+                                },
+                                contentDescription = "Super Shuffle"
                             )
                         }
                         OutlinedButton(
@@ -1765,13 +1873,14 @@ fun ToggleButtonWithSlash(
                 modifier = Modifier.size(24.dp)
             )
             if (!checked) {
-                Canvas(modifier = Modifier.size(24.dp)) {
-                    val strokeWidth = 2.dp.toPx()
+                Canvas(modifier = Modifier.size(28.dp)) {
+                    val strokeWidth = 3.dp.toPx()
                     drawLine(
                         color = slashColor,
-                        start = androidx.compose.ui.geometry.Offset(x = size.width * 0.1f, y = size.height * 0.1f),
-                        end = androidx.compose.ui.geometry.Offset(x = size.width * 0.9f, y = size.height * 0.9f),
-                        strokeWidth = strokeWidth
+                        start = androidx.compose.ui.geometry.Offset(x = size.width * 0.05f, y = size.height * 0.05f),
+                        end = androidx.compose.ui.geometry.Offset(x = size.width * 0.95f, y = size.height * 0.95f),
+                        strokeWidth = strokeWidth,
+                        cap = StrokeCap.Round
                     )
                 }
             }
