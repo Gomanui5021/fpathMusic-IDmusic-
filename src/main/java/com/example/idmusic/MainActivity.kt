@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.content.Intent
+import android.content.IntentFilter
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -539,10 +540,45 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val targetUuid = remember { java.util.UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315") }
+
+        fun scanMatchedDevices() {
+            try {
+                val adapter = BluetoothAdapter.getDefaultAdapter()
+                val bonded = adapter?.bondedDevices?.toList() ?: emptyList()
+                
+                bonded.forEach { dev ->
+                    try { dev.fetchUuidsWithSdp() } catch (_: Exception) {}
+                }
+
+                val matched = bonded.filter { dev ->
+                    try {
+                        dev.uuids?.any { it.uuid == targetUuid } == true
+                    } catch (_: SecurityException) {
+                        false
+                    }
+                }
+                deviceList = matched
+            } catch (_: SecurityException) {}
+        }
+
         DisposableEffect(Unit) {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(ctx: Context?, intent: Intent?) {
+                    if (intent?.action == BluetoothDevice.ACTION_UUID) {
+                        scanMatchedDevices()
+                    }
+                }
+            }
+            val filter = IntentFilter(BluetoothDevice.ACTION_UUID)
+            context.registerReceiver(receiver, filter)
+
             onDispose {
                 bluetoothClient.disconnect()
                 MusicService.onTrackEnded = null
+                try {
+                    context.unregisterReceiver(receiver)
+                } catch (_: Exception) {}
             }
         }
 
@@ -704,9 +740,13 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             }
+        }
 
-            val adapter = BluetoothAdapter.getDefaultAdapter()
-            deviceList = adapter?.bondedDevices?.toList() ?: emptyList()
+        LaunchedEffect(isConnected) {
+            while (!isConnected) {
+                scanMatchedDevices()
+                delay(3000)
+            }
         }
 
         LaunchedEffect(isConnected) {
@@ -856,26 +896,25 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (duration > 0) {
-                        val sliderValue = currentPosition.toFloat() / duration.toFloat()
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                        ) {
-                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Slider(
-                                value = sliderValue,
-                                onValueChange = { currentPosition = (it * duration).toInt() },
-                                onValueChangeFinished = { bluetoothClient.sendSeek(currentPosition) },
-                                modifier = Modifier.weight(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.primary, 
-                                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
-                                )
+                    val sliderValue = if (duration > 0) (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                    ) {
+                        Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
+                            onValueChangeFinished = { if (duration > 0) bluetoothClient.sendSeek(currentPosition) },
+                            modifier = Modifier.weight(1f),
+                            enabled = duration > 0,
+                            colors = SliderDefaults.colors(
+                                thumbColor = MaterialTheme.colorScheme.primary, 
+                                activeTrackColor = MaterialTheme.colorScheme.primary,
+                                inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                             )
-                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                        }
+                        )
+                        Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                     
                     Row(
@@ -1100,47 +1139,73 @@ class MainActivity : ComponentActivity() {
                     .padding(padding)
             ) {
                 if (!isConnected) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        OutlinedButton(
-                            onClick = { onDisconnect() },
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
-                            colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
+                    Column(modifier = Modifier.fillMaxSize().padding(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("← 戻る")
+                            OutlinedButton(
+                                onClick = { onDisconnect() },
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                                colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Text("← 戻る")
+                            }
                         }
-                    }
 
-                    LazyColumn(modifier = Modifier.fillMaxSize().padding(top = 48.dp)) {
-                        items(deviceList) { device ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        connectingDevice = device
-                                        connectedDeviceName = device.name ?: "不明"
-                                        Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
-                                        
-                                        val intent = Intent(context, MusicService::class.java).apply {
-                                            action = MusicService.ACTION_UPDATE_STATE
-                                            putExtra("IS_PLAYING", false)
-                                            putExtra("TITLE", "接続中...")
-                                            putExtra("DEVICE", device.name ?: "不明")
-                                        }
-                                        ContextCompat.startForegroundService(context, intent)
+                        Spacer(modifier = Modifier.height(24.dp))
 
-                                        scope.launch(Dispatchers.IO) {
-                                            bluetoothClient.connect(device)
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            if (deviceList.isEmpty()) {
+                                item {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "通信待機中のデバイスを検索中...\n(受信用端末で「受信側」を選択し、通信待機状態にしてください)",
+                                            textAlign = TextAlign.Center,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            } else {
+                                items(deviceList) { device ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                connectingDevice = device
+                                                connectedDeviceName = device.name ?: "不明"
+                                                Toast.makeText(context, "${device.name ?: "デバイス"} へ接続中...", Toast.LENGTH_SHORT).show()
+                                                
+                                                val intent = Intent(context, MusicService::class.java).apply {
+                                                    action = MusicService.ACTION_UPDATE_STATE
+                                                    putExtra("IS_PLAYING", false)
+                                                    putExtra("TITLE", "接続中...")
+                                                    putExtra("DEVICE", device.name ?: "不明")
+                                                }
+                                                ContextCompat.startForegroundService(context, intent)
+
+                                                scope.launch(Dispatchers.IO) {
+                                                    bluetoothClient.connect(device)
+                                                }
+                                            }
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = device.name ?: "不明",
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (connectingDevice == device) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(text = device.name ?: "不明", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
-                                if (connectingDevice == device) {
-                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+                                    HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
                                 }
                             }
                         }
@@ -1245,6 +1310,12 @@ class MainActivity : ComponentActivity() {
 
         fun playSong(uri: String) {
             val found = displayMusicList.find { it.uri.toString() == uri }
+                ?: displayMusicList.find { it.path == uri }
+                ?: displayMusicList.find { it.title == uri }
+                ?: musicList.find { it.uri.toString() == uri }
+                ?: musicList.find { it.path == uri }
+                ?: musicList.find { it.title == uri }
+
             if (found != null) {
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_PLAY
@@ -1537,17 +1608,17 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     
-                    if (duration > 0) {
-                        val sliderValue = currentPosition.toFloat() / duration.toFloat()
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                        ) {
-                            Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Slider(
-                                value = sliderValue,
-                                onValueChange = { currentPosition = (it * duration).toInt() },
-                                onValueChangeFinished = { 
+                    val sliderValue = if (duration > 0) (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                    ) {
+                        Text(text = formatTime(currentPosition), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = { if (duration > 0) currentPosition = (it * duration).toInt() },
+                            onValueChangeFinished = { 
+                                if (duration > 0) {
                                     if (isBluetoothEnabled) server?.seekTo(currentPosition) else {
                                         val intent = Intent(context, MusicService::class.java).apply {
                                             action = MusicService.ACTION_SEEK
@@ -1555,16 +1626,17 @@ class MainActivity : ComponentActivity() {
                                         }
                                         context.startService(intent)
                                     }
-                                },
-                                modifier = Modifier.weight(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.primary, 
-                                    activeTrackColor = MaterialTheme.colorScheme.primary,
-                                    inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
-                                )
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = duration > 0,
+                            colors = SliderDefaults.colors(
+                                thumbColor = MaterialTheme.colorScheme.primary, 
+                                activeTrackColor = MaterialTheme.colorScheme.primary,
+                                inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
                             )
-                            Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                        }
+                        )
+                        Text(text = formatTime(duration), modifier = Modifier.width(45.dp), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                     
                     Spacer(modifier = Modifier.height(12.dp))
