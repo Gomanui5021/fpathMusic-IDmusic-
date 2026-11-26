@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.painter.Painter
@@ -76,11 +77,12 @@ class MainActivity : ComponentActivity() {
             val localAudioFiles = mutableListOf<File>()
 
             fun searchAudioFiles(dir: File, depth: Int = 0) {
-                if (depth > 6) return
+                if (depth > 4) return
                 val files = dir.listFiles() ?: return
                 for (file in files) {
                     if (file.isDirectory) {
-                        if (!file.name.startsWith(".")) {
+                        val name = file.name
+                        if (!name.startsWith(".") && !name.equals("Android", ignoreCase = true)) {
                             searchAudioFiles(file, depth + 1)
                         }
                     } else if (file.isFile) {
@@ -441,6 +443,7 @@ class MainActivity : ComponentActivity() {
         var deviceList by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
         var isConnected by remember { mutableStateOf(false) }
         var isPlaying by remember { mutableStateOf(false) }
+        var isSyncing by remember { mutableStateOf(false) }
         var currentSongTitle by remember { mutableStateOf<String?>(null) }
         var currentSongUri by remember { mutableStateOf<String?>(null) }
         var currentPosition by remember { mutableStateOf(0) }
@@ -541,32 +544,28 @@ class MainActivity : ComponentActivity() {
         }
 
         val targetUuid = remember { java.util.UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315") }
-
-        fun scanMatchedDevices() {
-            try {
-                val adapter = BluetoothAdapter.getDefaultAdapter()
-                val bonded = adapter?.bondedDevices?.toList() ?: emptyList()
-                
-                bonded.forEach { dev ->
-                    try { dev.fetchUuidsWithSdp() } catch (_: Exception) {}
-                }
-
-                val matched = bonded.filter { dev ->
-                    try {
-                        dev.uuids?.any { it.uuid == targetUuid } == true
-                    } catch (_: SecurityException) {
-                        false
-                    }
-                }
-                deviceList = matched
-            } catch (_: SecurityException) {}
-        }
+        val sdpResponseTimeMap = remember { mutableStateMapOf<String, Long>() }
 
         DisposableEffect(Unit) {
             val receiver = object : android.content.BroadcastReceiver() {
                 override fun onReceive(ctx: Context?, intent: Intent?) {
                     if (intent?.action == BluetoothDevice.ACTION_UUID) {
-                        scanMatchedDevices()
+                        try {
+                            val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) {
+                                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                            }
+                            if (device != null) {
+                                val hasUuid = device.uuids?.any { it.uuid == targetUuid } == true
+                                if (hasUuid) {
+                                    sdpResponseTimeMap[device.address] = System.currentTimeMillis()
+                                } else {
+                                    sdpResponseTimeMap.remove(device.address)
+                                }
+                            }
+                        } catch (_: SecurityException) {}
                     }
                 }
             }
@@ -588,15 +587,19 @@ class MainActivity : ComponentActivity() {
                 scope.launch {
                     isConnected = true
                     connectingDevice = null
+                    isSyncing = true
                     Toast.makeText(context, "接続成功", Toast.LENGTH_SHORT).show()
                     
                     val intent = Intent(context, MusicService::class.java).apply {
                         action = MusicService.ACTION_UPDATE_STATE
-                        putExtra("IS_PLAYING", false)
-                        putExtra("TITLE", "接続済み")
+                        putExtra("IS_PLAYING", isPlaying)
+                        putExtra("TITLE", currentSongTitle ?: "接続済み")
                         putExtra("DEVICE", connectedDeviceName)
                     }
                     context.startService(intent)
+
+                    delay(1200)
+                    isSyncing = false
                 }
             }
 
@@ -604,9 +607,13 @@ class MainActivity : ComponentActivity() {
             bluetoothClient.onDisconnected = {
                 isConnected = false
                 connectingDevice = null
-                val intent = Intent(context, MusicService::class.java)
-                context.stopService(intent)
+                sdpResponseTimeMap.clear()
+                deviceList = emptyList()
                 
+                // 切断を検知した時は曲を止める
+                val service = MusicService.instance
+                service?.pauseLocal()
+
                 scope.launch {
                     Toast.makeText(context, "切断されました", Toast.LENGTH_SHORT).show()
                 }
@@ -614,6 +621,15 @@ class MainActivity : ComponentActivity() {
 
             bluetoothClient.onReceiveMusicList = { list: List<MusicItem> ->
                 musicItems = list.map { it.copy() }
+                currentSongUri?.let { uri ->
+                    val song = list.find { it.uri.toString() == uri }
+                        ?: list.find { uri.endsWith("/${it.uri.lastPathSegment}") }
+                        ?: list.find { it.path == uri }
+                        ?: list.find { it.title == uri }
+                    if (song != null) {
+                        currentSongTitle = song.title
+                    }
+                }
             }
 
             bluetoothClient.onReceiveMessage = { message ->
@@ -635,13 +651,14 @@ class MainActivity : ComponentActivity() {
                         }
                         message.startsWith("PLAY:") -> {
                             val uri = message.removePrefix("PLAY:")
+                            currentSongUri = uri
                             val song = musicItems.find { it.uri.toString() == uri }
+                                ?: musicItems.find { uri.endsWith("/${it.uri.lastPathSegment}") }
+                                ?: musicItems.find { it.path == uri }
+                                ?: musicItems.find { it.title == uri }
                             if (song != null) {
                                 currentSongTitle = song.title
-                                currentSongUri = song.uri.toString()
                                 isPlaying = true
-                                duration = 0
-                                currentPosition = 0
                                 
                                 // 受信側での再生開始に合わせてキャッシュがあれば適用
                                 bluetoothClient.getCachedArt(song.albumId)?.let {
@@ -744,8 +761,26 @@ class MainActivity : ComponentActivity() {
 
         LaunchedEffect(isConnected) {
             while (!isConnected) {
-                scanMatchedDevices()
-                delay(3000)
+                try {
+                    val adapter = BluetoothAdapter.getDefaultAdapter()
+                    val bonded = adapter?.bondedDevices?.toList() ?: emptyList()
+                    val targetUuid = java.util.UUID.fromString("c8f9f668-17b1-4d3a-ba34-68f397619315")
+
+                    bonded.forEach { dev ->
+                        try { dev.fetchUuidsWithSdp() } catch (_: SecurityException) {}
+                    }
+
+                    val matched = bonded.filter { dev ->
+                        try {
+                            dev.uuids?.any { it.uuid == targetUuid } == true
+                        } catch (_: SecurityException) {
+                            false
+                        }
+                    }
+                    deviceList = matched
+                } catch (_: SecurityException) {}
+
+                delay(2000)
             }
         }
 
@@ -844,7 +879,7 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
-                            IconButton(onClick = { skipPrevious() }) {
+                            IconButton(onClick = { if (!isSyncing) skipPrevious() }, enabled = !isSyncing) {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_left), 
                                     contentDescription = "Skip Previous", 
@@ -855,22 +890,24 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.width(20.dp))
                             OutlinedButton(
                                 onClick = {
-                                    if (isPlaying) {
-                                        bluetoothClient.sendPause()
-                                        isPlaying = false
-                                    } else {
+                                    if (isSyncing) return@OutlinedButton
+                                    val targetState = !isPlaying
+                                    if (targetState) {
                                         bluetoothClient.sendResume()
-                                        isPlaying = true
+                                    } else {
+                                        bluetoothClient.sendPause()
                                     }
+                                    isPlaying = targetState
                                     val intent = Intent(context, MusicService::class.java).apply {
                                         action = MusicService.ACTION_UPDATE_STATE
-                                        putExtra("IS_PLAYING", isPlaying)
+                                        putExtra("IS_PLAYING", targetState)
                                         putExtra("TITLE", currentSongTitle)
                                         putExtra("DEVICE", connectedDeviceName)
                                         putExtra("DURATION", duration)
                                     }
                                     context.startService(intent)
                                 },
+                                enabled = !isSyncing,
                                 modifier = Modifier.width(84.dp).height(52.dp),
                                 shape = RoundedCornerShape(percent = 50),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
@@ -885,7 +922,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             Spacer(modifier = Modifier.width(20.dp))
-                            IconButton(onClick = { skipNext() }) {
+                            IconButton(onClick = { if (!isSyncing) skipNext() }, enabled = !isSyncing) {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_right), 
                                     contentDescription = "Skip Next", 
@@ -1012,7 +1049,12 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         OutlinedButton(
-                            onClick = { bluetoothClient.sendDisconnect() },
+                            onClick = { 
+                                bluetoothClient.sendDisconnect()
+                                val service = MusicService.instance
+                                service?.pauseLocal()
+                                isConnected = false
+                            },
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
                             colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
                         ) { Text("切断") }
@@ -1268,14 +1310,17 @@ class MainActivity : ComponentActivity() {
         val isDark = isSystemInDarkTheme()
         val server = remember { if (isBluetoothEnabled) BluetoothServer(context) else null }
 
+        val service = MusicService.instance
         var clientName by remember { mutableStateOf(if (isBluetoothEnabled) "未接続" else "ローカル") }
         var isConnected by remember { mutableStateOf(!isBluetoothEnabled) }
-        var playingTitle by remember { mutableStateOf<String?>(null) }
-        var currentSongUri by remember { mutableStateOf<String?>(null) }
-        var isPlaying by remember { mutableStateOf(false) }
-        var currentPosition by remember { mutableStateOf(0) }
-        var duration by remember { mutableStateOf(0) }
-        val musicList = remember { getMusicListStatic(context) }
+        var isSyncing by remember { mutableStateOf(false) }
+        var playingTitle by remember { mutableStateOf<String?>(service?.getCurrentTitleText()) }
+        var currentSongUri by remember { mutableStateOf<String?>(service?.getCurrentUriText()) }
+        var isPlaying by remember { mutableStateOf(service?.isPlaying() == true) }
+        var currentPosition by remember { mutableStateOf(service?.getCurrentPosition() ?: 0) }
+        var duration by remember { mutableStateOf(service?.getDuration() ?: 0) }
+        var musicList by remember { mutableStateOf<List<MusicItem>>(emptyList()) }
+        var isMusicLoading by remember { mutableStateOf(true) }
         val displayMusicList = remember(isBluetoothEnabled, isConnected, musicList) {
             if (isBluetoothEnabled) {
                 if (isConnected) musicList else emptyList()
@@ -1299,7 +1344,13 @@ class MainActivity : ComponentActivity() {
             return ContentUris.withAppendedId(artworkUri, albumId)
         }
 
-        var albumArtUri by remember { mutableStateOf<Uri?>(null) }
+        var albumArtUri by remember { 
+            mutableStateOf<Uri?>(
+                if (service != null && service.getCurrentAlbumIdValue() > 0) {
+                    getAlbumArtUri(service.getCurrentAlbumIdValue())
+                } else null
+            ) 
+        }
 
         fun formatTime(ms: Int): String {
             val totalSec = ms / 1000
@@ -1384,6 +1435,15 @@ class MainActivity : ComponentActivity() {
         }
 
         LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) {
+                val loadedList = getMusicListStatic(context)
+                withContext(Dispatchers.Main) {
+                    musicList = loadedList
+                    isMusicLoading = false
+                    server?.setMusicList(loadedList)
+                }
+            }
+
             if (isBluetoothEnabled && server != null) {
                 val intent = Intent(context, MusicService::class.java).apply {
                     action = MusicService.ACTION_UPDATE_STATE
@@ -1393,10 +1453,40 @@ class MainActivity : ComponentActivity() {
                 }
                 ContextCompat.startForegroundService(context, intent)
 
-                server.setMusicList(musicList)
                 server.start()
                 server.onClientNameReceived = { name -> CoroutineScope(Dispatchers.Main).launch { clientName = name } }
-                server.onConnected = { CoroutineScope(Dispatchers.Main).launch { isConnected = true } }
+                server.onConnected = { 
+                    CoroutineScope(Dispatchers.Main).launch { 
+                        isConnected = true 
+                        isSyncing = true
+
+                        val currentService = MusicService.instance
+                        val activeUri = currentSongUri ?: currentService?.getCurrentUriText()
+                        val activePlaying = currentService?.isPlaying() == true || isPlaying
+
+                        if (activePlaying) {
+                            isPlaying = true
+                        }
+
+                        if (activeUri != null) {
+                            server.sendMessage("PLAY:$activeUri")
+                            server.sendMessage(if (activePlaying) "STATE:PLAYING" else "STATE:PAUSED")
+
+                            if (currentService != null && currentService.getDuration() > 0) {
+                                val pos = currentService.getCurrentPosition()
+                                val dur = currentService.getDuration()
+                                server.sendMessage("PROGRESS:$pos||$dur")
+                            }
+
+                            server.sendMessage("SET_REPEAT:${if (isRepeatEnabled) "ON" else "OFF"}")
+                            server.sendMessage("SET_SHUFFLE:${if (isShuffleEnabled) "ON" else "OFF"}")
+                            server.sendMessage("SET_SUPER_SHUFFLE:${if (isSuperShuffleEnabled) "ON" else "OFF"}")
+                        }
+
+                        delay(1200)
+                        isSyncing = false
+                    } 
+                }
                 server.onPlay = { value ->
                     CoroutineScope(Dispatchers.Main).launch {
                         if (value == "PAUSED") {
@@ -1418,10 +1508,18 @@ class MainActivity : ComponentActivity() {
                 server.onDisconnected = {
                     CoroutineScope(Dispatchers.Main).launch {
                         isConnected = false
-                        val stopIntent = Intent(context, MusicService::class.java)
-                        context.stopService(stopIntent)
-                        onCancel()
-                        Toast.makeText(context, "接続が切断されました", Toast.LENGTH_SHORT).show()
+                        server?.stopServer()
+                        
+                        // 切断を検知した時は曲を止める
+                        val service = MusicService.instance
+                        service?.pauseLocal()
+
+                        Toast.makeText(context, "切断されました。通信を停止しました", Toast.LENGTH_SHORT).show()
+
+                        // 通信待機状態にせず通信停止（ローカル再生モード）へ切り替える
+                        if (onStopCommunication != null) {
+                            onStopCommunication()
+                        }
                     }
                 }
                 
@@ -1454,18 +1552,26 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(isConnected) {
+        LaunchedEffect(Unit) {
             while (true) {
-                val service = MusicService.instance
-                if (service != null) {
-                    isPlaying = service.isPlaying()
-                    if (service.getDuration() > 0) {
-                        currentPosition = service.getCurrentPosition()
-                        duration = service.getDuration()
+                val currentService = MusicService.instance
+                if (currentService != null) {
+                    isPlaying = currentService.isPlaying()
+                    if (currentService.getDuration() > 0) {
+                        currentPosition = currentService.getCurrentPosition()
+                        duration = currentService.getDuration()
                     }
-                    audioFormat = service.getCurrentAudioFormat()
-                    audioCodec = service.getCurrentAudioCodec()
-                    outputDevice = service.getCurrentOutputDevice()
+                    val uri = currentService.getCurrentUriText()
+                    if (uri != null && uri != currentSongUri) {
+                        currentSongUri = uri
+                        playingTitle = currentService.getCurrentTitleText()
+                        if (currentService.getCurrentAlbumIdValue() > 0) {
+                            albumArtUri = getAlbumArtUri(currentService.getCurrentAlbumIdValue())
+                        }
+                    }
+                    audioFormat = currentService.getCurrentAudioFormat()
+                    audioCodec = currentService.getCurrentAudioCodec()
+                    outputDevice = currentService.getCurrentOutputDevice()
                 }
                 delay(500)
             }
@@ -1556,7 +1662,7 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
-                            IconButton(onClick = { skipPrevious() }) {
+                            IconButton(onClick = { if (!isSyncing) skipPrevious() }, enabled = !isSyncing) {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_left), 
                                     contentDescription = "Skip Previous", 
@@ -1567,22 +1673,24 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.width(20.dp))
                             OutlinedButton(
                                 onClick = {
-                                    if (isPlaying) {
-                                        if (isBluetoothEnabled) {
-                                            server?.pauseMusic()
-                                        } else {
-                                            MusicService.instance?.pauseLocal()
-                                        }
-                                        isPlaying = false
-                                    } else {
+                                    if (isSyncing) return@OutlinedButton
+                                    val targetState = !isPlaying
+                                    if (targetState) {
                                         if (isBluetoothEnabled) {
                                             server?.resumeMusic()
                                         } else {
                                             MusicService.instance?.resumeLocal()
                                         }
-                                        isPlaying = true
+                                    } else {
+                                        if (isBluetoothEnabled) {
+                                            server?.pauseMusic()
+                                        } else {
+                                            MusicService.instance?.pauseLocal()
+                                        }
                                     }
+                                    isPlaying = targetState
                                 },
+                                enabled = !isSyncing,
                                 modifier = Modifier.width(84.dp).height(52.dp),
                                 shape = RoundedCornerShape(percent = 50),
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
@@ -1597,7 +1705,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             Spacer(modifier = Modifier.width(20.dp))
-                            IconButton(onClick = { skipNext() }) {
+                            IconButton(onClick = { if (!isSyncing) skipNext() }, enabled = !isSyncing) {
                                 Icon(
                                     painter = painterResource(R.drawable.skip_right), 
                                     contentDescription = "Skip Next", 
@@ -1699,9 +1807,13 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(
                             onClick = { 
                                 server?.stopServer()
-                                val stopIntent = Intent(context, MusicService::class.java)
-                                context.stopService(stopIntent)
-                                onCancel() 
+                                val service = MusicService.instance
+                                service?.pauseLocal()
+                                if (isBluetoothEnabled && onStopCommunication != null) {
+                                    onStopCommunication()
+                                } else {
+                                    isConnected = false
+                                }
                             },
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
                             colors = ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.surface, contentColor = MaterialTheme.colorScheme.primary)
@@ -1711,7 +1823,14 @@ class MainActivity : ComponentActivity() {
             }
 
             val serverSongListUiContent = @Composable {
-                if (displayMusicList.isEmpty()) {
+                if (isMusicLoading && (!isBluetoothEnabled || isConnected)) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                } else if (displayMusicList.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxSize().padding(16.dp),
                         contentAlignment = Alignment.Center

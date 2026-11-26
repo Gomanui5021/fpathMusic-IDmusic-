@@ -234,6 +234,7 @@ class BluetoothServer(private val context: Context) : Thread() {
                     sendAlbumArt(parts[0].toLongOrNull() ?: -1L, parts[1])
                 }
             }
+            message == "PING" -> sendMessage("PONG")
             message == "DISCONNECT" -> stopServer()
             else -> onReceiveMessage?.invoke(message)
         }
@@ -307,19 +308,31 @@ class BluetoothServer(private val context: Context) : Thread() {
     }
 
     fun stopServer() {
-        if (!isRunning) return
         isRunning = false
         instance = null
         
         thread {
             synchronized(this) {
                 try {
-                    adapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
-                    serverSocket?.close()
-                    socket?.close()
+                    writer?.write("DISCONNECT\n")
+                    writer?.flush()
+                } catch (_: Exception) {}
+                try {
                     reader?.close()
+                } catch (_: Exception) {}
+                try {
                     writer?.close()
                 } catch (_: Exception) {}
+                try {
+                    socket?.close()
+                } catch (_: Exception) {}
+                try {
+                    serverSocket?.close()
+                } catch (_: Exception) {}
+                try {
+                    adapter?.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp)
+                } catch (_: Exception) {}
+
                 serverSocket = null
                 socket = null
                 reader = null

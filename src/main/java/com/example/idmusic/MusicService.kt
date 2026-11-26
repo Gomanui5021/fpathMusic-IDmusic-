@@ -660,4 +660,9 @@ class MusicService : Service() {
         instance = null
         super.onDestroy()
     }
+
+    fun getCurrentUriText(): String? = currentUri
+    fun getCurrentTitleText(): String? = currentTitle
+    fun getCurrentAlbumIdValue(): Long = currentAlbumId
+    fun getCurrentBitmapImage(): Bitmap? = currentBitmap
 }
